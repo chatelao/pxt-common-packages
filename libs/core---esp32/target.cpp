@@ -7,6 +7,8 @@
 #include <fcntl.h>
 
 #include "esp_log.h"
+#include "esp_mac.h"
+#include "esp_timer.h"
 
 // make sure compiler doesn't optimize accesses to PXT_EXPORTData in vmload.cpp by placing
 // it in different file (this one)
@@ -18,6 +20,7 @@ __attribute__((used)) __attribute__((aligned(0x20))) const uintptr_t PXT_EXPORTD
     0x42424242,
     0x08010801,
     0x8de9d83e,
+    0, // topFlashAddr (PXT_EXPORTData[4])
     PXT_EXPORT(&pxt::buffer_vt),
     PXT_EXPORT(&pxt::number_vt),
     PXT_EXPORT(&pxt::RefAction_vtable),

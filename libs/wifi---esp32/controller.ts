@@ -98,11 +98,11 @@ namespace net {
         }
 
         public socketConnect(socket_num: number, dest: string | Buffer, port: number, conn_mode = TCP_MODE): boolean {
-            if (conn_mode != TLS_MODE)
-                throw "only TLS supported for now"
             if (typeof dest != "string")
-                throw "connection by IP not supported in TLS mode"
-            return this.logError("connect", _wifi.socketConnectTLS(socket_num, dest, port))
+                throw "connection by IP not supported"
+            if (conn_mode == TLS_MODE)
+                return this.logError("connect", _wifi.socketConnectTLS(socket_num, dest, port))
+            return this.logError("connect", _wifi.socketConnectTCP(socket_num, dest, port))
         }
 
         public socketWrite(socket_num: number, buffer: Buffer): void {

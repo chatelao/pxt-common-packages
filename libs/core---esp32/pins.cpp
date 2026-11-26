@@ -1,5 +1,6 @@
 #include "pxt.h"
 
+#include "esp_idf_version.h"
 #include "esp_task_wdt.h"
 
 namespace pxt {
@@ -84,7 +85,16 @@ namespace control {
 //%
 void setWatchdog(int timeout_s) {
     if (timeout_s > 0) {
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+        esp_task_wdt_config_t cfg = {
+            .timeout_ms = (uint32_t)timeout_s * 1000,
+            .idle_core_mask = 0,
+            .trigger_panic = true,
+        };
+        esp_task_wdt_reconfigure(&cfg);
+#else
         esp_task_wdt_init(timeout_s, true);
+#endif
         esp_task_wdt_add(NULL);
     } else {
         esp_task_wdt_delete(NULL);

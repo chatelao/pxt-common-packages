@@ -7,6 +7,8 @@
 #include <fcntl.h>
 
 #include "esp_log.h"
+#include "esp_rom_sys.h"
+#include "rom/ets_sys.h"
 
 namespace pxt {
 

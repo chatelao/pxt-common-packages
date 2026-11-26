@@ -2,6 +2,9 @@
 
 #include "esp_tls.h"
 #include "esp_crt_bundle.h"
+#include "lwip/sockets.h"
+#include "lwip/netdb.h"
+#include <sys/ioctl.h>
 
 #define TAG "ssl"
 #define LOG(...) ESP_LOGI(TAG, __VA_ARGS__)
@@ -14,6 +17,7 @@ static esp_tls_cfg_t tls_cfg;
 
 struct socket_t {
     esp_tls_t *ssl;
+    int tcp_fd;
     int bytesAvailable;
     struct read_args *readers;
 };
@@ -24,6 +28,39 @@ static socket_t *sockets[MAX_SOCKET];
 static void process_reader(struct read_args *args);
 
 static void update_bytes_avail(socket_t *sock) {
+    if (sock->tcp_fd > 0) {
+        int avail = 0;
+        if (ioctl(sock->tcp_fd, FIONREAD, &avail) < 0) {
+            close(sock->tcp_fd);
+            sock->tcp_fd = -1;
+            sock->bytesAvailable = 0;
+            for (int i = 0; i < MAX_SOCKET; ++i) {
+                if (sockets[i] == sock) {
+                    raiseEvent(eventID(), 1000 + i);
+                    break;
+                }
+            }
+            return;
+        }
+        int emitEvent = 0;
+        if (avail > 0) {
+            if (sock->bytesAvailable == 0)
+                emitEvent = 1;
+            sock->bytesAvailable = avail;
+        } else {
+            sock->bytesAvailable = 0;
+        }
+        if (emitEvent) {
+            for (int i = 0; i < MAX_SOCKET; ++i) {
+                if (sockets[i] == sock) {
+                    raiseEvent(eventID(), 1000 + i);
+                    break;
+                }
+            }
+        }
+        return;
+    }
+
     if (!sock->ssl)
         return;
 
@@ -59,7 +96,7 @@ static void update_bytes_avail(socket_t *sock) {
 static void flush_ssl(void *) {
     for (int i = 0; i < MAX_SOCKET; ++i) {
         auto s = sockets[i];
-        if (!s || !s->ssl)
+        if (!s || (!s->ssl && s->tcp_fd <= 0))
             continue;
         update_bytes_avail(s);
         while (s->bytesAvailable && s->readers) {
@@ -86,6 +123,7 @@ int socketAlloc() {
         if (!sockets[i]) {
             sockets[i] = new socket_t;
             memset(sockets[i], 0, sizeof(*sockets[i]));
+            sockets[i]->tcp_fd = -1;
             return i;
         }
     }
@@ -101,7 +139,7 @@ int socketAlloc() {
 
 #define GET_SOCK_SSL()                                                                             \
     GET_SOCK();                                                                                    \
-    if (!sock->ssl)                                                                                \
+    if (!sock->ssl && sock->tcp_fd <= 0)                                                           \
         return -12;
 
 struct conn_args {
@@ -117,9 +155,16 @@ PXT_DEF_STRING(sError, "ssl: error")
 
 static void check_error(socket_t *sock, int r) {
     if (r < 0) {
-        int err_code, flags;
+        int err_code = 0, flags = 0;
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+        esp_tls_error_handle_t err_handle = NULL;
+        esp_err_t err = esp_tls_get_error_handle(sock->ssl, &err_handle);
+        if (err == ESP_OK && err_handle)
+            err = esp_tls_get_and_clear_last_error(err_handle, &err_code, &flags);
+#else
         esp_err_t err =
             esp_tls_get_and_clear_last_error(sock->ssl->error_handle, &err_code, &flags);
+#endif
 
         DMESG("ESP TLS error: err=%x (%d/%d) res=%d", err, err_code, flags, r);
         vm_stack_trace();
@@ -164,6 +209,47 @@ int socketConnectTLS(int fd, String host, int port) {
     return 0; // ignored
 }
 
+static void worker_conn_tcp(conn_args *args) {
+    int res = -1;
+    struct addrinfo hints = {};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    char portStr[8];
+    snprintf(portStr, sizeof(portStr), "%d", args->port);
+    struct addrinfo *resInfo = NULL;
+    if (getaddrinfo(args->host, portStr, &hints, &resInfo) == 0 && resInfo) {
+        int s = socket(resInfo->ai_family, resInfo->ai_socktype, 0);
+        if (s >= 0) {
+            if (connect(s, resInfo->ai_addr, resInfo->ai_addrlen) == 0) {
+                args->sock->tcp_fd = s;
+                res = 1;
+            } else {
+                close(s);
+            }
+        }
+        freeaddrinfo(resInfo);
+    }
+    resumeFiber(args->ctx, fromInt(res));
+    delete args;
+}
+
+/** Connect with plain TCP */
+//% promise
+int socketConnectTCP(int fd, String host, int port) {
+    GET_SOCK();
+    if (sock->ssl || sock->tcp_fd > 0)
+        return -2;
+    if (port <= 0 || port > 0xffff)
+        return -3;
+    auto args = new conn_args;
+    args->host = host->getUTF8Data();
+    args->port = port;
+    args->sock = sock;
+    args->ctx = suspendFiber();
+    worker_run(worker, (TaskFunction_t)worker_conn_tcp, args);
+    return 0; // ignored
+}
+
 struct write_args {
     socket_t *sock;
     FiberContext *ctx;
@@ -171,8 +257,13 @@ struct write_args {
 };
 
 static void worker_write(write_args *args) {
-    int r = esp_tls_conn_write(args->sock->ssl, args->data->data, args->data->length);
-    check_error(args->sock, r);
+    int r;
+    if (args->sock->tcp_fd > 0) {
+        r = send(args->sock->tcp_fd, args->data->data, args->data->length, 0);
+    } else {
+        r = esp_tls_conn_write(args->sock->ssl, args->data->data, args->data->length);
+        check_error(args->sock, r);
+    }
     resumeFiber(args->ctx, fromInt(r));
     delete args;
 }
@@ -212,7 +303,9 @@ static void process_reader(read_args *args) {
     if (num > sock->bytesAvailable)
         num = sock->bytesAvailable;
     args->buf = malloc(num);
-    int r = esp_tls_conn_read(sock->ssl, args->buf, num);
+    int r = sock->tcp_fd > 0
+        ? recv(sock->tcp_fd, args->buf, num, MSG_DONTWAIT)
+        : esp_tls_conn_read(sock->ssl, args->buf, num);
     if (r < 0) {
         free(args->buf);
         resumeFiber(args->ctx, fromInt(r));
@@ -269,6 +362,10 @@ int socketBytesAvailable(int fd) {
 }
 
 static void worker_close(socket_t *sock) {
+    if (sock->tcp_fd > 0) {
+        close(sock->tcp_fd);
+        sock->tcp_fd = -1;
+    }
     if (sock->ssl) {
         esp_tls_conn_destroy(sock->ssl);
         sock->ssl = NULL;
@@ -282,7 +379,7 @@ int socketClose(int fd) {
     sockets[fd] = NULL;
     worker_run(worker, (TaskFunction_t)worker_close, sock);
     // wait for the actual close - we only really have memory for one open SSL socket...
-    while (sock->ssl)
+    while (sock->ssl || sock->tcp_fd > 0)
         vTaskDelay(5);
     free(sock);
     return 0;

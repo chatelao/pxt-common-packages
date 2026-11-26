@@ -2,6 +2,7 @@
 #include "freertos/event_groups.h"
 #include "esp_wifi.h"
 #include "esp_netif.h"
+#include "driver/gpio.h"
 
 #define TAG "wifi"
 #define LOG(...) ESP_LOGI(TAG, __VA_ARGS__)
@@ -249,6 +250,25 @@ int rssi() {
     if (esp_wifi_sta_get_ap_info(&info) == 0)
         return info.rssi;
     return -128;
+}
+
+/** Select external U.FL antenna (true) or onboard ceramic antenna (false). */
+//%
+void setExternalAntenna(bool external) {
+#if CONFIG_IDF_TARGET_ESP32C6
+    int rfEn = getConfig(CFG_PIN_WIFI_RESET, -1);
+    int rfAnt = getConfig(CFG_PIN_WIFI_GPIO0, -1);
+    if (rfEn >= 0) {
+        gpio_set_direction((gpio_num_t)rfEn, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)rfEn, 0);
+    }
+    if (rfAnt >= 0) {
+        gpio_set_direction((gpio_num_t)rfAnt, GPIO_MODE_OUTPUT);
+        gpio_set_level((gpio_num_t)rfAnt, external ? 1 : 0);
+    }
+#else
+    (void)external;
+#endif
 }
 
 } // namespace _wifi

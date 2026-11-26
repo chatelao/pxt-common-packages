@@ -17,9 +17,13 @@ class ZPin : RefObject {
     uint8_t gpio_num;
     uint8_t status;
     PullMode pullMode;
+    int8_t ledc_channel;
+    uint32_t pwm_period_us;
+    uint64_t last_edge_us;
 
   public:
     uint8_t id;
+    uint8_t name;
 
     ZPin(int gpio_num);
     void disconnect();
@@ -28,9 +32,17 @@ class ZPin : RefObject {
     int setPull(PullMode pull);
     int getDigitalValue(PullMode pull);
     int eventOn(int eventType);
+    int getAnalogValue();
+    int setAnalogValue(int value);
+    int setAnalogPeriodUs(int period);
+    int setServoValue(int value, int range = 2000, int center = 1500);
+    int setServoPulseUs(int duration);
+    int getGpioNum() const { return gpio_num; }
 };
 
 static inline ZPin *asZPin(TValue v) {
+    if (v == TAG_UNDEFINED || v == TAG_NULL)
+        return NULL;
     if (!isPointer(v))
         failedCast(v);
     auto vt = getVTable((RefObject *)v);

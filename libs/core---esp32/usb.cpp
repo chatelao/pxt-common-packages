@@ -1,5 +1,7 @@
 #include "pxt.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
+#include "rom/ets_sys.h"
 #if PXT_USB
 #include "tinyusb.h"
 #include "tusb_cdc_acm.h"
@@ -334,8 +336,15 @@ int HF2::sendResponseWithData(const void *data, int size) {
 #endif
 
 namespace pxt {
+static void (*pSendToUART)(const char *data, int len) = NULL;
+void setSendToUART(void (*f)(const char *, int)) {
+    pSendToUART = f;
+}
 void sendSerial(const char *data, int len) {
-    ets_printf(LOG_BOLD(LOG_COLOR_PURPLE) "%s" LOG_RESET_COLOR, data);
+    if (pSendToUART)
+        pSendToUART(data, len);
+    else
+        ets_printf("%s", data);
 #if PXT_USB
     hf2.sendSerial(data, len);
 #endif

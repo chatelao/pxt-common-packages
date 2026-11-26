@@ -1,4 +1,5 @@
 #include "pxt.h"
+#include "esp_idf_version.h"
 #include "nvs_flash.h"
 #include "mbedtls/sha256.h"
 
@@ -37,9 +38,15 @@ const char *keyName(String key) {
     uint8_t output[32];
 
     mbedtls_sha256_init(&sha256_ctx);
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    mbedtls_sha256_starts(&sha256_ctx, 0);
+    mbedtls_sha256_update(&sha256_ctx, (unsigned char *)key->getUTF8Data(), key->getUTF8Size());
+    mbedtls_sha256_finish(&sha256_ctx, output);
+#else
     mbedtls_sha256_starts_ret(&sha256_ctx, false);
     mbedtls_sha256_update_ret(&sha256_ctx, (unsigned char *)key->getUTF8Data(), key->getUTF8Size());
     mbedtls_sha256_finish_ret(&sha256_ctx, output);
+#endif
 
     for (int i = 0; i < sizeof(keybuf) - 1; ++i)
         keybuf[i] = output[i] == 0 ? 0x01 : output[i];
@@ -122,6 +129,20 @@ Buffer _get(String key) {
 //%
 void _userClean() {
     settings_init();
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    nvs_iterator_t it = NULL;
+    esp_err_t res_it = nvs_entry_find(NVS_DEFAULT_PART_NAME, STORE_NAME, NVS_TYPE_BLOB, &it);
+    while (res_it == ESP_OK) {
+        nvs_entry_info_t info;
+        nvs_entry_info(it, &info);
+        uint8_t *tmp = getEntry(info.key);
+        if (tmp[1] != '#')
+            ESP_ERROR_CHECK(nvs_erase_key(handle, info.key));
+        free(tmp);
+        res_it = nvs_entry_next(&it);
+    }
+    nvs_release_iterator(it);
+#else
     nvs_iterator_t it = nvs_entry_find(NVS_DEFAULT_PART_NAME, STORE_NAME, NVS_TYPE_BLOB);
     for (; it; it = nvs_entry_next(it)) {
         nvs_entry_info_t info;
@@ -131,6 +152,7 @@ void _userClean() {
             ESP_ERROR_CHECK(nvs_erase_key(handle, info.key));
         free(tmp);
     }
+#endif
     ESP_ERROR_CHECK(nvs_commit(handle));
 }
 
@@ -144,6 +166,32 @@ RefCollection *_list(String prefix) {
     auto prefLen = prefix->getUTF8Size();
     auto wantsInternal = prefData[0] == '#';
 
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    nvs_iterator_t it = NULL;
+    esp_err_t res_it = nvs_entry_find(NVS_DEFAULT_PART_NAME, STORE_NAME, NVS_TYPE_BLOB, &it);
+    while (res_it == ESP_OK) {
+        nvs_entry_info_t info;
+        nvs_entry_info(it, &info);
+        uint8_t *tmp = getEntry(info.key);
+        if (!wantsInternal && tmp[1] == '#') {
+            free(tmp);
+            res_it = nvs_entry_next(&it);
+            continue;
+        }
+        if (tmp[0] < prefLen || memcmp(tmp + 1, prefData, prefLen) != 0) {
+            free(tmp);
+            res_it = nvs_entry_next(&it);
+            continue;
+        }
+        auto str = mkString((char *)(tmp + 1), tmp[0]);
+        registerGCObj(str);
+        res->head.push((TValue)str);
+        unregisterGCObj(str);
+        free(tmp);
+        res_it = nvs_entry_next(&it);
+    }
+    nvs_release_iterator(it);
+#else
     nvs_iterator_t it = nvs_entry_find(NVS_DEFAULT_PART_NAME, STORE_NAME, NVS_TYPE_BLOB);
 
     for (; it; it = nvs_entry_next(it)) {
@@ -160,6 +208,7 @@ RefCollection *_list(String prefix) {
         unregisterGCObj(str);
         free(tmp);
     }
+#endif
     unregisterGCObj(res);
 
     return res;

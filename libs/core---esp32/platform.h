@@ -19,7 +19,11 @@
 #define DEV_NUM_PINS 50
 
 #define DEV_PWM_PINS 0xffff_ffff_ffffULL
+#if CONFIG_IDF_TARGET_ESP32C6
+#define DEV_AIN_PINS 0x7fULL // GPIO0..GPIO6 (ADC1)
+#else
 #define DEV_AIN_PINS 0ULL
+#endif
 
 // Codal doesn't yet distinguish between PWM and AIN
 #define DEV_ANALOG_PINS (DEV_PWM_PINS | DEV_AIN_PINS)
@@ -51,12 +55,17 @@ void install_gpio0_handler();
 
 #define PXT_REGISTER_RESET(fn) pxt::registerResetFunction(fn)
 
-#ifdef CONFIG_IDF_TARGET_ESP32S2
+#if CONFIG_IDF_TARGET_ESP32C6
+// 0x42000000-0x43000000 unified MMU flash cache on ESP32-C6
+#define PXT_IS_READONLY(v) (isTagged(v) || ((uintptr_t)(v) >> 24) == 0x42)
+#elif CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32S3
+#define PXT_IS_READONLY(v) (isTagged(v) || ((uintptr_t)(v) >> 24) == 0x3c)
+#elif CONFIG_IDF_TARGET_ESP32S2
 // 0x3f000000-... range of data SPI flash (we only support first 4M)
-#define PXT_IS_READONLY(v) (isTagged(v) || ((uintptr_t)v >> 22) == 0xfc)
+#define PXT_IS_READONLY(v) (isTagged(v) || ((uintptr_t)(v) >> 22) == 0xfc)
 #else
 // 0x3f400000-0x3f700000 range of data SPI flash
-#define PXT_IS_READONLY(v) (isTagged(v) || ((uintptr_t)v >> 22) == 0xfd)
+#define PXT_IS_READONLY(v) (isTagged(v) || ((uintptr_t)(v) >> 22) == 0xfd)
 #endif
 
 
@@ -66,7 +75,7 @@ extern "C" {
 extern const uintptr_t PXT_EXPORTData[];
 }
 
-#ifdef CONFIG_IDF_TARGET_ESP32S2
+#if CONFIG_FREERTOS_UNICORE || CONFIG_IDF_TARGET_ESP32S2 || CONFIG_IDF_TARGET_ESP32C6 || CONFIG_IDF_TARGET_ESP32C3
 #define WORKER_CPU PRO_CPU_NUM
 #else
 #define WORKER_CPU APP_CPU_NUM

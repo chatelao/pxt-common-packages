@@ -168,7 +168,7 @@ void target_yield() {
 #endif
 }
 
-void sleep_ms(uint32_t ms) {
+void sleep_ms(unsigned ms) {
     currentFiber->wakeTime = current_time_ms() + ms;
     schedule();
 }
@@ -496,7 +496,7 @@ void registerWithDal(int id, int event, Action a, int flags) {
     setBinding(id, event, a);
 }
 
-uint32_t afterProgramPage() {
+unsigned afterProgramPage() {
     return 0;
 }
 

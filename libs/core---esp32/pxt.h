@@ -26,8 +26,75 @@ void raiseEvent(int id, int event);
 int allocateNotifyEvent();
 void sleep_core_us(uint64_t us);
 
-class Button;
+#define DEVICE_ID_FIRST_BUTTON 1000
+#define DEVICE_ID_BUTTON_AB 3
+#define DEVICE_BUTTON_ALL_EVENTS 1
+#define DEVICE_BUTTON_SIMPLE_EVENTS 2
+#define DEVICE_BUTTON_EVT_DOWN 1
+#define DEVICE_BUTTON_EVT_UP 2
+#define DEVICE_BUTTON_EVT_CLICK 3
+#define DEVICE_BUTTON_EVT_LONG_CLICK 4
+
+enum ButtonPolarity {
+    ACTIVE_LOW = 0,
+    ACTIVE_HIGH = 1
+};
+
+class CodalComponent {
+  public:
+    int id;
+    CodalComponent(int _id = 0) : id(_id) {}
+    virtual ~CodalComponent() {}
+};
+
+CodalComponent *lookupComponent(int id);
+
+class AbstractButton : public CodalComponent {
+  public:
+    AbstractButton(int _id = 0) : CodalComponent(_id) {}
+    virtual bool isPressed() = 0;
+    virtual bool wasPressed() = 0;
+    virtual void setEventConfiguration(int) {}
+};
+
+class Button : public AbstractButton {
+    ZPin *pin;
+    bool activeLow;
+    bool lastState;
+
+  public:
+    Button(ZPin &p, int _id, int eventConfig, ButtonPolarity polarity, PullMode pull);
+    bool isPressed() override;
+    bool wasPressed() override;
+};
+
+class MultiButton : public AbstractButton {
+    int idA;
+    int idB;
+    bool lastState;
+
+  public:
+    MultiButton(int _idA, int _idB, int _id);
+    bool isPressed() override;
+    bool wasPressed() override;
+};
+
 typedef Button *Button_;
+
+} // namespace pxt
+
+namespace pins {
+class EspI2CProxy;
+class EspSPIProxy;
+} // namespace pins
+
+namespace pxt {
+typedef ::pins::EspI2CProxy *I2C_;
+typedef ::pins::EspSPIProxy *SPI_;
+
+static inline Button_ asButton_(TValue v) { return (Button_)v; }
+static inline I2C_ asI2C_(TValue v) { return (I2C_)v; }
+static inline SPI_ asSPI_(TValue v) { return (SPI_)v; }
 
 extern volatile bool paniced;
 extern char **initialArgv;

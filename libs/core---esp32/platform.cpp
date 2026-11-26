@@ -1,7 +1,9 @@
 #include "pxt.h"
 
 #include "esp_system.h"
+#include "esp_random.h"
 #include "esp_log.h"
+#include "rom/ets_sys.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_private/system_internal.h"
@@ -58,10 +60,50 @@ void install_gpio0_handler() {
 }
 #endif
 
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+#include "driver/usb_serial_jtag.h"
+static void usb_serial_send(const char *data, int len) {
+    if (data && len > 0) {
+        if (usb_serial_jtag_is_connected()) {
+            usb_serial_jtag_write_bytes(data, len, pdMS_TO_TICKS(10));
+        } else {
+            for (int i = 0; i < len; i++)
+                ets_printf("%c", data[i]);
+        }
+    }
+}
+#endif
+
 extern "C" void usb_init();
 extern "C" void target_init() {
     initRandomSeed();
     memInfo();
+#if CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    usb_serial_jtag_driver_config_t jtag_cfg = {
+        .tx_buffer_size = 512,
+        .rx_buffer_size = 512,
+    };
+    usb_serial_jtag_driver_install(&jtag_cfg);
+    setSendToUART(usb_serial_send);
+#endif
+#if CONFIG_IDF_TARGET_ESP32C6
+    int rfEn = getConfig(CFG_PIN_WIFI_RESET, -1);
+    int rfAnt = getConfig(CFG_PIN_WIFI_GPIO0, -1);
+    if (rfEn >= 0) {
+        gpio_config_t cfg = {};
+        cfg.pin_bit_mask = (1ULL << rfEn);
+        cfg.mode = GPIO_MODE_OUTPUT;
+        gpio_config(&cfg);
+        gpio_set_level((gpio_num_t)rfEn, 0);
+    }
+    if (rfAnt >= 0) {
+        gpio_config_t cfg = {};
+        cfg.pin_bit_mask = (1ULL << rfAnt);
+        cfg.mode = GPIO_MODE_OUTPUT;
+        gpio_config(&cfg);
+        gpio_set_level((gpio_num_t)rfAnt, 0);
+    }
+#endif
     usb_init();
 }
 

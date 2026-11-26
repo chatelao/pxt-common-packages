@@ -882,6 +882,7 @@ static inline bool eq_core(TValue a, TValue b, ValType ta) {
         return a == b;
 }
 
+//%
 bool eqq_bool(TValue a, TValue b) {
     if (a == TAG_NAN || b == TAG_NAN)
         return false;
@@ -1521,7 +1522,7 @@ int getConfig(int key, int defl) {
 #ifdef PXT_VM
     if (!vmImg)
         return defl;
-    int *cfgData = vmImg->configData;
+    int *cfgData = (int *)vmImg->configData;
 #else
     int *cfgData = NULL;
     if (bytecode) {

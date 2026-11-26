@@ -34,7 +34,7 @@ void vmStart() {
     memInfo();
     install_gpio0_handler();
 
-    auto sect = (VMImageSection *)PXT_EXPORTData[4];
+    auto sect = (VMImageSection *)PXT_EXPORTData[5];
     auto hd = (VMImageHeader *)sect->data;
     if (sect->type != SectionType::InfoHeader || hd->magic0 != VM_MAGIC0 || hd->imageSize < 256) {
         dmesg("invalid image at %p", sect);
