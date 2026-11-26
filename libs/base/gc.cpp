@@ -26,11 +26,25 @@
 #define VAR_BLOCK_WORDS(vt) (((uint32_t)(vt) << 4) >> (4 + 2))
 #endif
 
+#define MARKED_MASK 0x1
+#define ANY_MARKED_MASK 0x3
+
+#ifdef CONFIG_IDF_TARGET_ESP32C6
+// ESP32-C6 DRAM (0x408...) and DROM (0x42...) both have bit 30 set, while bits 31, 29, 28 are 0.
+#define FREE_MASK (1ULL << 31)
+#define ARRAY_MASK (1ULL << 29)
+#define PERMA_MASK (1ULL << 28)
+
+#define IS_FREE(vt) (((uintptr_t)(vt) >> 31) & 1)
+#define IS_ARRAY(vt) (((uintptr_t)(vt) >> 29) & 1)
+#define IS_PERMA(vt) (((uintptr_t)(vt) >> 28) & 1)
+#define IS_VAR_BLOCK(vt) ((((uintptr_t)(vt) & (FREE_MASK | ARRAY_MASK))) != 0)
+#define IS_MARKED(vt) ((uintptr_t)(vt)&MARKED_MASK)
+#define IS_LIVE(vt) (IS_MARKED(vt) || (((uintptr_t)(vt) & (ARRAY_MASK | PERMA_MASK)) == (ARRAY_MASK | PERMA_MASK)))
+#else
 #define FREE_MASK (1ULL << (HIGH_SHIFT + 3))
 #define ARRAY_MASK (1ULL << (HIGH_SHIFT + 2))
 #define PERMA_MASK (1ULL << (HIGH_SHIFT + 1))
-#define MARKED_MASK 0x1
-#define ANY_MARKED_MASK 0x3
 
 // the bit operations should be faster than loading large constants
 #define IS_FREE(vt) ((uintptr_t)(vt) >> (HIGH_SHIFT + 3))
@@ -39,6 +53,7 @@
 #define IS_VAR_BLOCK(vt) ((uintptr_t)(vt) >> (HIGH_SHIFT + 2))
 #define IS_MARKED(vt) ((uintptr_t)(vt)&MARKED_MASK)
 #define IS_LIVE(vt) (IS_MARKED(vt) || (((uintptr_t)(vt) >> (HIGH_SHIFT)) == 0x6))
+#endif
 
 //#define PXT_GC_DEBUG 1
 #ifndef PXT_GC_CHECKS
@@ -619,7 +634,7 @@ extern "C" void *realloc(void *ptr, size_t size) {
 
         if (ptr != NULL && mem != NULL) {
             auto r = (uintptr_t *)ptr;
-            GC_CHECK((r[-1] >> (HIGH_SHIFT + 1)) == 3, 41);
+            GC_CHECK((r[-1] & (ARRAY_MASK | PERMA_MASK)) == (ARRAY_MASK | PERMA_MASK), 41);
             size_t blockSize = VAR_BLOCK_WORDS(r[-1]);
             memcpy(mem, ptr, min(blockSize * sizeof(void *), size));
             free(ptr);
@@ -693,7 +708,7 @@ void *app_alloc(int numbytes) {
 
 void *app_free(void *ptr) {
     auto r = (uintptr_t *)ptr;
-    GC_CHECK((r[-1] >> (HIGH_SHIFT + 1)) == 3, 41);
+    GC_CHECK((r[-1] & (ARRAY_MASK | PERMA_MASK)) == (ARRAY_MASK | PERMA_MASK), 41);
     r[-1] |= FREE_MASK;
     return r;
 }
