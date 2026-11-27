@@ -57,10 +57,15 @@ static void init() {
     settings_init();
 
     ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_err_t ev_err = esp_event_loop_create_default();
+    if (ev_err != ESP_OK && ev_err != ESP_ERR_INVALID_STATE)
+        ESP_ERROR_CHECK(ev_err);
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    wifi_mode_t cur_mode = WIFI_MODE_NULL;
+    if (esp_wifi_get_mode(&cur_mode) == ESP_ERR_WIFI_NOT_INIT) {
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    }
 
     esp_netif_config_t netif_config = ESP_NETIF_DEFAULT_WIFI_STA();
     esp_netif_t *netif = esp_netif_new(&netif_config);
@@ -167,6 +172,8 @@ Buffer scanResults() {
                 ent.flags |= JD_WIFI_APFLAGS_IEEE_802_11G;
             if (src->phy_11n)
                 ent.flags |= JD_WIFI_APFLAGS_IEEE_802_11N;
+            if (src->phy_11ax)
+                ent.flags |= JD_WIFI_APFLAGS_IEEE_802_11AX;
             if (src->phy_lr)
                 ent.flags |= JD_WIFI_APFLAGS_IEEE_802_LONG_RANGE;
             if (src->wps)

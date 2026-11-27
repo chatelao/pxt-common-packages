@@ -16,6 +16,25 @@
 #define CODAL_RADIO codal::NRF52Radio
 #define CODAL_EVENT codal::Event
 
+// ESP32 / ESP32-C6 via ESP-NOW
+#elif defined(PXT_ESP32)
+
+#include "esp_wifi.h"
+#include "esp_now.h"
+#include "esp_netif.h"
+#include "esp_event.h"
+#include "freertos/queue.h"
+#include <stddef.h>
+#include <string.h>
+
+#define DEVICE_OK 0
+#ifndef DEVICE_NOT_SUPPORTED
+#define DEVICE_NOT_SUPPORTED -1002
+#endif
+#ifndef CREATE_ONLY
+#define CREATE_ONLY 0
+#endif
+
 #endif
 
 using namespace pxt;
@@ -44,12 +63,206 @@ using namespace pxt;
 #define DEVICE_RADIO_EVT_DATAGRAM MICROBIT_RADIO_EVT_DATAGRAM
 #endif
 
+#if defined(PXT_ESP32)
+namespace pxt {
+
+struct EspRadioEvent {
+    int src;
+    int value;
+    EspRadioEvent(int s, int v, int flags = 0) : src(s), value(v) { (void)flags; }
+};
+
+struct EspRadioPacket {
+    uint8_t len;
+    int rssi;
+    uint8_t data[DEVICE_RADIO_MAX_PACKET_SIZE];
+
+    int length() const { return len; }
+    const uint8_t *getBytes() const { return data; }
+    int getRSSI() const { return rssi; }
+};
+
+class EspNowRadio {
+    static constexpr uint8_t BCAST_MAC[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    static constexpr uint8_t MAGIC_PREFIX = 'P';
+    static constexpr uint8_t MAGIC_DATAGRAM = 'R';
+    static constexpr uint8_t MAGIC_EVENT = 'E';
+    static constexpr int DEFAULT_RSSI_DBM = -73;
+    static constexpr uint32_t RX_QUEUE_DEPTH = 16;
+
+    struct __attribute__((packed)) DatagramFrame {
+        uint8_t magic[2];
+        uint8_t group;
+        uint8_t len;
+        uint8_t data[DEVICE_RADIO_MAX_PACKET_SIZE];
+    };
+
+    struct __attribute__((packed)) EventFrame {
+        uint8_t magic[2];
+        uint8_t group;
+        uint8_t reserved;
+        int32_t src;
+        int32_t value;
+    };
+
+    static constexpr int DATAGRAM_HEADER_SIZE = (int)offsetof(DatagramFrame, data);
+
+    static bool active;
+    static uint8_t groupId;
+    static QueueHandle_t rxQueue;
+
+    static void onEspNowRecv(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
+        if (!active || !data || len < DATAGRAM_HEADER_SIZE || data[0] != MAGIC_PREFIX)
+            return;
+
+        if (data[1] == MAGIC_EVENT && len == (int)sizeof(EventFrame)) {
+            const auto *frame = (const EventFrame *)data;
+            if (frame->group == groupId)
+                pxt::raiseEvent(frame->src, frame->value);
+            return;
+        }
+
+        if (data[1] == MAGIC_DATAGRAM) {
+            const auto *frame = (const DatagramFrame *)data;
+            int payloadLen = frame->len;
+            if (frame->group != groupId || !rxQueue)
+                return;
+            if (payloadLen <= 0 || payloadLen > DEVICE_RADIO_MAX_PACKET_SIZE ||
+                payloadLen > len - DATAGRAM_HEADER_SIZE)
+                return;
+
+            EspRadioPacket pkt = {};
+            pkt.len = (uint8_t)payloadLen;
+            pkt.rssi = (info && info->rx_ctrl) ? info->rx_ctrl->rssi : DEFAULT_RSSI_DBM;
+            memcpy(pkt.data, frame->data, payloadLen);
+            if (xQueueSend(rxQueue, &pkt, 0) == pdPASS)
+                pxt::raiseEvent(DEVICE_ID_RADIO, DEVICE_RADIO_EVT_DATAGRAM);
+        }
+    }
+
+  public:
+    struct DatagramSubsys {
+        EspRadioPacket recv() {
+            EspRadioPacket pkt = {};
+            pkt.rssi = DEFAULT_RSSI_DBM;
+            if (rxQueue)
+                xQueueReceive(rxQueue, &pkt, 0);
+            return pkt;
+        }
+
+        void send(const uint8_t *buf, int len) {
+            if (!active || !buf || len <= 0 || len > DEVICE_RADIO_MAX_PACKET_SIZE)
+                return;
+            DatagramFrame frame;
+            frame.magic[0] = MAGIC_PREFIX;
+            frame.magic[1] = MAGIC_DATAGRAM;
+            frame.group = groupId;
+            frame.len = (uint8_t)len;
+            memcpy(frame.data, buf, len);
+            esp_now_send(BCAST_MAC, (const uint8_t *)&frame, DATAGRAM_HEADER_SIZE + len);
+        }
+    } datagram;
+
+    struct EventSubsys {
+        void eventReceived(EspRadioEvent ev) {
+            if (!active)
+                return;
+            EventFrame frame = {{MAGIC_PREFIX, MAGIC_EVENT}, groupId, 0, ev.src, ev.value};
+            esp_now_send(BCAST_MAC, (const uint8_t *)&frame, sizeof(frame));
+        }
+    } event;
+
+    int enable() {
+        if (!rxQueue)
+            rxQueue = xQueueCreate(RX_QUEUE_DEPTH, sizeof(EspRadioPacket));
+
+        (void)esp_netif_init();
+        esp_err_t evErr = esp_event_loop_create_default();
+        if (evErr != ESP_OK && evErr != ESP_ERR_INVALID_STATE)
+            return DEVICE_NOT_SUPPORTED;
+
+        wifi_mode_t mode = WIFI_MODE_NULL;
+        if (esp_wifi_get_mode(&mode) == ESP_ERR_WIFI_NOT_INIT) {
+            wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+            if (esp_wifi_init(&cfg) != ESP_OK)
+                return DEVICE_NOT_SUPPORTED;
+            esp_wifi_set_storage(WIFI_STORAGE_RAM);
+            esp_wifi_set_mode(WIFI_MODE_STA);
+            if (esp_wifi_start() != ESP_OK)
+                return DEVICE_NOT_SUPPORTED;
+        } else if (mode == WIFI_MODE_NULL) {
+            esp_wifi_set_mode(WIFI_MODE_STA);
+            esp_wifi_start();
+        }
+
+        esp_err_t nowErr = esp_now_init();
+        if (nowErr != ESP_OK && nowErr != ESP_ERR_ESPNOW_EXIST)
+            return DEVICE_NOT_SUPPORTED;
+
+        esp_now_register_recv_cb(onEspNowRecv);
+
+        if (!esp_now_is_peer_exist(BCAST_MAC)) {
+            esp_now_peer_info_t peer = {};
+            memcpy(peer.peer_addr, BCAST_MAC, sizeof(BCAST_MAC));
+            peer.channel = 0;
+            peer.ifidx = WIFI_IF_STA;
+            peer.encrypt = false;
+            esp_now_add_peer(&peer);
+        }
+
+        active = true;
+        return DEVICE_OK;
+    }
+
+    int disable() {
+        active = false;
+        return DEVICE_OK;
+    }
+
+    void setGroup(int id) {
+        groupId = (uint8_t)(id & 0xff);
+    }
+
+    void setTransmitPower(int power) {
+        if (power < 0) power = 0;
+        if (power > 7) power = 7;
+        // ESP-IDF TX power is in 0.25 dBm units: 0..7 maps to 8..78 (2.0 dBm .. 19.5 dBm)
+        esp_wifi_set_max_tx_power((int8_t)(8 + power * 10));
+    }
+
+    void setFrequencyBand(int band) {
+        if (band < 0) band = 0;
+        if (band > 83) band = 83;
+        // Map 2400..2483 MHz (1 MHz steps) to 2.4 GHz Wi-Fi channels 1..13 (5 MHz spacing)
+        int channel = (band <= 12) ? 1 : ((band - 12) / 5 + 1);
+        if (channel > 13) channel = 13;
+        esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE);
+    }
+};
+
+constexpr uint8_t EspNowRadio::BCAST_MAC[6];
+bool EspNowRadio::active = false;
+uint8_t EspNowRadio::groupId = 0;
+QueueHandle_t EspNowRadio::rxQueue = NULL;
+
+} // namespace pxt
+
+#define CODAL_RADIO pxt::EspNowRadio
+#define CODAL_EVENT pxt::EspRadioEvent
+#define CODAL_RADIO_HAS_RSSI 1
+#endif
+
 //% color=#E3008C weight=96 icon="\uf012"
 namespace radio {
     
 #if CODAL_RADIO_MICROBIT_DAL
     CODAL_RADIO* getRadio() {
         return &uBit.radio;
+    }
+#elif defined(PXT_ESP32)
+    CODAL_RADIO* getRadio() {
+        static CODAL_RADIO instance;
+        return &instance;
     }
 #elif defined(CODAL_RADIO)
 class RadioWrap {
@@ -180,6 +393,12 @@ CODAL_RADIO* getRadio() {
         int rssi = p.getRSSI();
         auto length = p.length();
         auto bytes = p.getBytes();
+#elif CODAL_RADIO_HAS_RSSI
+        auto length = p.length();
+        if (length == 0)
+            return NULL;
+        int rssi = p.getRSSI();
+        auto bytes = p.getBytes();
 #else
         // TODO: RSSI support
         int rssi = -73;        
@@ -208,8 +427,8 @@ CODAL_RADIO* getRadio() {
         if (radioEnable() != DEVICE_OK || NULL == msg) return;
 
         // don't send RSSI data; and make sure no buffer underflow
-        int len = msg->length - sizeof(int);
-        if (len > 0)
+        int len = msg->length - (int)sizeof(int);
+        if (len > 0 && len <= DEVICE_RADIO_MAX_PACKET_SIZE)
             getRadio()->datagram.send(msg->data, len);
 #endif            
     }

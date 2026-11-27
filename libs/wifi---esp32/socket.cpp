@@ -18,6 +18,9 @@ static esp_tls_cfg_t tls_cfg;
 struct socket_t {
     esp_tls_t *ssl;
     int tcp_fd;
+    bool is_udp;
+    bool has_udp_dest;
+    struct sockaddr_in udp_dest;
     int bytesAvailable;
     struct read_args *readers;
 };
@@ -250,6 +253,73 @@ int socketConnectTCP(int fd, String host, int port) {
     return 0; // ignored
 }
 
+static void bind_udp_port_or_ephemeral(int fd, uint16_t port) {
+    struct sockaddr_in bind_addr = {};
+    bind_addr.sin_family = AF_INET;
+    bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    bind_addr.sin_port = htons(port);
+    if (bind(fd, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) < 0) {
+        bind_addr.sin_port = 0;
+        bind(fd, (struct sockaddr *)&bind_addr, sizeof(bind_addr));
+    }
+}
+
+static bool resolve_udp_destination(const char *host, int port, struct sockaddr_in *out_addr) {
+    if (!host || !host[0] || strcmp(host, "0.0.0.0") == 0)
+        return false;
+
+    struct addrinfo hints = {};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    char portStr[8];
+    snprintf(portStr, sizeof(portStr), "%d", port);
+
+    struct addrinfo *resInfo = NULL;
+    if (getaddrinfo(host, portStr, &hints, &resInfo) != 0 || !resInfo)
+        return false;
+
+    memcpy(out_addr, resInfo->ai_addr, sizeof(struct sockaddr_in));
+    freeaddrinfo(resInfo);
+    return true;
+}
+
+static void worker_conn_udp(conn_args *args) {
+    int res = -1;
+    int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s >= 0) {
+        int yes = 1;
+        setsockopt(s, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
+        setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+        bind_udp_port_or_ephemeral(s, (uint16_t)args->port);
+
+        args->sock->is_udp = true;
+        args->sock->has_udp_dest =
+            resolve_udp_destination(args->host, args->port, &args->sock->udp_dest);
+        args->sock->tcp_fd = s;
+        res = 1;
+    }
+    resumeFiber(args->ctx, fromInt(res));
+    delete args;
+}
+
+/** Connect/bind with UDP (supports broadcast) */
+//% promise
+int socketConnectUDP(int fd, String host, int port) {
+    GET_SOCK();
+    if (sock->ssl || sock->tcp_fd > 0)
+        return -2;
+    if (port <= 0 || port > 0xffff)
+        return -3;
+    auto args = new conn_args;
+    args->host = host ? host->getUTF8Data() : "";
+    args->port = port;
+    args->sock = sock;
+    args->ctx = suspendFiber();
+    worker_run(worker, (TaskFunction_t)worker_conn_udp, args);
+    return 0; // ignored
+}
+
 struct write_args {
     socket_t *sock;
     FiberContext *ctx;
@@ -259,7 +329,12 @@ struct write_args {
 static void worker_write(write_args *args) {
     int r;
     if (args->sock->tcp_fd > 0) {
-        r = send(args->sock->tcp_fd, args->data->data, args->data->length, 0);
+        if (args->sock->is_udp && args->sock->has_udp_dest) {
+            r = sendto(args->sock->tcp_fd, args->data->data, args->data->length, 0,
+                       (struct sockaddr *)&args->sock->udp_dest, sizeof(args->sock->udp_dest));
+        } else {
+            r = send(args->sock->tcp_fd, args->data->data, args->data->length, 0);
+        }
     } else {
         r = esp_tls_conn_write(args->sock->ssl, args->data->data, args->data->length);
         check_error(args->sock, r);

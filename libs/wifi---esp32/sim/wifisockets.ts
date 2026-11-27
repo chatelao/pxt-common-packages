@@ -157,7 +157,7 @@ namespace pxsim._wifi {
 
     export function _allowed() {
         const bid = board()?.runOptions?.boardDefinition?.id
-        return /esp32|-s2/.test(bid)
+        return !bid || /esp32|-s2|-c6/.test(bid)
     }
 
     function getState() {
@@ -185,7 +185,7 @@ namespace pxsim._wifi {
             }
         }
         const idx = state.sockets.length
-        if (idx > MAX_SOCKET)
+        if (idx >= MAX_SOCKET)
             return -1
         state.sockets.push(new WifiSocket(idx))
         return idx
@@ -204,6 +204,46 @@ namespace pxsim._wifi {
             console.log("invalid host: " + host)
             return Promise.resolve(-1)
         }
+    }
+
+    export function socketConnectTCP(fd: int32, host: string, port: int32): Promise<int32> {
+        const sock = getSock(fd)
+        if (!sock)
+            return Promise.resolve(-11)
+        if (!host || port <= 0 || port > 0xffff)
+            return Promise.resolve(-3)
+        return sock.openWS("ws://" + host + ":" + port + "/", [])
+            .catch(() => -1)
+    }
+
+    export function socketConnectUDP(fd: int32, host: string, port: int32): Promise<int32> {
+        const sock = getSock(fd)
+        if (!sock)
+            return Promise.resolve(-11)
+        if (port <= 0 || port > 0xffff)
+            return Promise.resolve(-3)
+        // Simulator UDP loopback/broadcast channel over Runtime.postMessage
+        sock.write = async (buf: RefBuffer) => {
+            if (sock._err === -20)
+                return -11
+            Runtime.postMessage({
+                type: "wifiudp",
+                broadcast: true,
+                host,
+                port,
+                data: buf.data
+            } as any)
+            return buf.data.length
+        }
+        board().addMessageListener((msg: SimulatorMessage) => {
+            if (sock._err === -20)
+                return
+            const u = msg as any
+            if (u && u.type === "wifiudp" && u.port === port && u.data) {
+                sock._queue(u.data)
+            }
+        })
+        return Promise.resolve(1)
     }
 
     export async function socketWrite(fd: int32, data: RefBuffer): Promise<int32> {
@@ -236,7 +276,9 @@ namespace pxsim._wifi {
         const sock = getSock(fd)
         if (!sock)
             return -11
+        sock._err = -20
         sock.close()
+        getState().sockets[fd] = null
         return 0
     }
 
@@ -251,12 +293,20 @@ namespace pxsim._wifi {
     export function startLoginServer(): void {
     }
 
+    export function isLoginServerEnabled(): boolean {
+        return false
+    }
+
     export function scanResults(): RefBuffer {
-        const b = new Uint8Array(7)
-        b[0] = -20 // rssi
-        b[1] = 0  // authmode
-        b.set(U.stringToUint8Array("WiFi"), 2)
-        return new RefBuffer(b)
+        const AP_ENTRY_SIZE = 48
+        const IEEE_802_11AX = 0x2000
+        const entry = new Uint8Array(AP_ENTRY_SIZE)
+        const view = new DataView(entry.buffer)
+        view.setUint32(0, IEEE_802_11AX, true) // flags
+        view.setInt8(8, -40)                   // rssi (dBm)
+        view.setUint8(9, 6)                    // channel
+        entry.set(U.stringToUint8Array("WiFi"), 16)
+        return new RefBuffer(entry)
     }
 
     export function connect(ssid: string, pass: string): int32 {
@@ -269,6 +319,7 @@ namespace pxsim._wifi {
     export function isConnected(): boolean { return true }
     export function ipInfo(): RefBuffer { return new RefBuffer(new Uint8Array(4 * 3)) }
     export function rssi(): number { return -24 }
+    export function setExternalAntenna(external: boolean): void { }
 
     declare const enum WifiEvent {
         ScanDone = 1,

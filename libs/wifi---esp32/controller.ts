@@ -97,12 +97,21 @@ namespace net {
             return true
         }
 
+        private formatDestinationHost(dest: string | Buffer): string {
+            if (typeof dest === "string")
+                return dest
+            if (dest && dest.length === 4)
+                return `${dest[0]}.${dest[1]}.${dest[2]}.${dest[3]}`
+            throw "connection by IP not supported"
+        }
+
         public socketConnect(socket_num: number, dest: string | Buffer, port: number, conn_mode = TCP_MODE): boolean {
-            if (typeof dest != "string")
-                throw "connection by IP not supported"
+            const host = this.formatDestinationHost(dest)
             if (conn_mode == TLS_MODE)
-                return this.logError("connect", _wifi.socketConnectTLS(socket_num, dest, port))
-            return this.logError("connect", _wifi.socketConnectTCP(socket_num, dest, port))
+                return this.logError("connect", _wifi.socketConnectTLS(socket_num, host, port))
+            if (conn_mode == UDP_MODE)
+                return this.logError("connect", _wifi.socketConnectUDP(socket_num, host, port))
+            return this.logError("connect", _wifi.socketConnectTCP(socket_num, host, port))
         }
 
         public socketWrite(socket_num: number, buffer: Buffer): void {

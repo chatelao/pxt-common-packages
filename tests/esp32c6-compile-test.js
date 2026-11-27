@@ -52,7 +52,25 @@ function verifyEsp32C6Files() {
 
     const wifiCpp = fs.readFileSync(path.join(libsDir, "wifi---esp32/wifi.cpp"), "utf8");
     assert.ok(wifiCpp.includes("setExternalAntenna"), "expected setExternalAntenna in wifi.cpp");
-    console.log("✔ ESP32-C6 C++/IDF/package files verified in pxt-common-packages");
+    assert.ok(wifiCpp.includes("phy_11ax"), "expected 802.11ax flag check in wifi.cpp");
+    assert.ok(wifiCpp.includes("ESP_ERR_WIFI_NOT_INIT"), "expected coexistence init guard in wifi.cpp");
+
+    const socketCpp = fs.readFileSync(path.join(libsDir, "wifi---esp32/socket.cpp"), "utf8");
+    assert.ok(socketCpp.includes("socketConnectUDP"), "expected socketConnectUDP in socket.cpp");
+    assert.ok(socketCpp.includes("SO_BROADCAST"), "expected SO_BROADCAST in socket.cpp");
+
+    const wifiShims = fs.readFileSync(path.join(libsDir, "wifi---esp32/shims.d.ts"), "utf8");
+    assert.ok(wifiShims.includes("shim=_wifi::socketConnectUDP"), "expected socketConnectUDP shim in wifi---esp32/shims.d.ts");
+
+    const wifiSim = fs.readFileSync(path.join(libsDir, "wifi---esp32/sim/wifisockets.ts"), "utf8");
+    assert.ok(wifiSim.includes("socketConnectUDP"), "expected socketConnectUDP in wifisockets.ts");
+    assert.ok(wifiSim.includes("socketConnectTCP"), "expected socketConnectTCP in wifisockets.ts");
+    assert.ok(wifiSim.includes("-c6"), "expected -c6 board support in wifisockets.ts");
+
+    const radioCpp = fs.readFileSync(path.join(libsDir, "radio/radio.cpp"), "utf8");
+    assert.ok(radioCpp.includes("PXT_ESP32"), "expected PXT_ESP32 ESP-NOW backend in radio.cpp");
+    assert.ok(radioCpp.includes("esp_now_send"), "expected esp_now_send in radio.cpp");
+    console.log("✔ ESP32-C6 C++/IDF/package/Phase-1 intercomm files verified in pxt-common-packages");
 }
 
 function loadPackageFiles(pkgDir, prefix, visited = new Set(), out = {}) {
@@ -127,10 +145,24 @@ async function verifyCommonPackageTestsCompile() {
     loadPackageFiles(path.join(libsDir, "wifi---esp32"), "pxt_modules/wifi/", new Set(), fileSystem);
     loadPackageFiles(path.join(libsDir, "net"), "pxt_modules/net/", new Set(), fileSystem);
     loadPackageFiles(path.join(libsDir, "mqtt"), "pxt_modules/mqtt/", new Set(), fileSystem);
+    loadPackageFiles(path.join(libsDir, "radio"), "pxt_modules/radio/", new Set(), fileSystem);
+    loadPackageFiles(path.join(libsDir, "radio-broadcast"), "pxt_modules/radio-broadcast/", new Set(), fileSystem);
 
     const coreTest = fs.readFileSync(path.join(libsDir, "core---esp32c6/test.ts"), "utf8");
     const serialTest = fs.readFileSync(path.join(libsDir, "serial---esp32/test.ts"), "utf8");
     const wifiTest = fs.readFileSync(path.join(libsDir, "wifi---esp32/test.ts"), "utf8");
+    const radioSnippet = `
+radio.setGroup(1);
+radio.setTransmitPower(7);
+radio.setFrequencyBand(10);
+radio.onReceivedString((s) => serial.writeLine(s));
+radio.onReceivedMessage(1, () => serial.writeLine("msg"));
+radio.sendNumber(42);
+radio.sendValue("k", 1.5);
+radio.sendString("hi");
+radio.sendBuffer(Buffer.fromUTF8("ab"));
+radio.sendMessage(1);
+`;
 
     fileSystem["pxt.json"] = JSON.stringify({
         name: "pxt-common-esp32c6-tests",
@@ -139,11 +171,13 @@ async function verifyCommonPackageTestsCompile() {
             "serial": "file:pxt_modules/serial",
             "wifi": "file:pxt_modules/wifi",
             "net": "file:pxt_modules/net",
-            "mqtt": "file:pxt_modules/mqtt"
+            "mqtt": "file:pxt_modules/mqtt",
+            "radio": "file:pxt_modules/radio",
+            "radio-broadcast": "file:pxt_modules/radio-broadcast"
         },
         files: ["main.ts"]
     });
-    fileSystem["main.ts"] = [coreTest, serialTest, wifiTest].join("\n\n");
+    fileSystem["main.ts"] = [coreTest, serialTest, wifiTest, radioSnippet].join("\n\n");
 
     const host = {
         readFile: (pkg, fn) => {
@@ -164,9 +198,9 @@ async function verifyCommonPackageTestsCompile() {
     if (!res.success) {
         console.error("Diagnostics:", JSON.stringify(res.diagnostics, null, 2));
     }
-    assert.strictEqual(res.success, true, "expected core---esp32c6, serial---esp32, and wifi---esp32 tests to compile");
+    assert.strictEqual(res.success, true, "expected core---esp32c6, serial---esp32, wifi---esp32, and radio tests to compile");
     assert.ok(res.outfiles[pxtc.BINARY_JS], "expected binary.js output");
-    console.log("✔ core---esp32c6, serial---esp32, and wifi---esp32 test.ts suites compiled cleanly!");
+    console.log("✔ core---esp32c6, serial---esp32, wifi---esp32, and radio suites compiled cleanly!");
 }
 
 (async () => {
