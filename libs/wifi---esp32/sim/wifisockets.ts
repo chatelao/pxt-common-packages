@@ -303,10 +303,6 @@ namespace pxsim._wifi {
         return loginServerEnabled
     }
 
-    export function isLoginServerEnabled(): boolean {
-        return false
-    }
-
     export function scanResults(): RefBuffer {
         const AP_ENTRY_SIZE = 48
         const IEEE_802_11AX = 0x2000
@@ -329,7 +325,6 @@ namespace pxsim._wifi {
     export function isConnected(): boolean { return true }
     export function ipInfo(): RefBuffer { return new RefBuffer(new Uint8Array(4 * 3)) }
     export function rssi(): number { return -24 }
-    export function setExternalAntenna(external: boolean): void { }
 
     export function startAP(ssid: string, password: string, channel: int32, maxConnections: int32): int32 {
         if (!ssid || ssid.length > 32)
