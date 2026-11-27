@@ -235,6 +235,22 @@ esp_netif_t *esp_netif_new(const esp_netif_config_t *esp_netif_config) {
     return (esp_netif_t *)&dummy_netif;
 }
 
+esp_netif_t *esp_netif_create_default_wifi_ap(void) {
+    static int dummy_ap_netif = 2;
+    return (esp_netif_t *)&dummy_ap_netif;
+}
+
+esp_err_t esp_netif_get_ip_info(esp_netif_t *esp_netif, esp_netif_ip_info_t *ip_info) {
+    (void)esp_netif;
+    if (ip_info) {
+        memset(ip_info, 0, sizeof(*ip_info));
+        ip_info->ip.addr = 0x0104A8C0; // 192.168.4.1
+        ip_info->netmask.addr = 0x00FFFFFF; // 255.255.255.0
+        ip_info->gw.addr = 0x0104A8C0;
+    }
+    return ESP_OK;
+}
+
 esp_err_t esp_netif_attach_wifi_station(esp_netif_t *esp_netif) {
     (void)esp_netif;
     return ESP_OK;

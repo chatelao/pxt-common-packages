@@ -53,11 +53,19 @@ typedef struct {
 } wifi_init_config_t;
 #define WIFI_INIT_CONFIG_DEFAULT() { 0 }
 
-typedef struct {
+typedef union {
     struct {
         uint8_t ssid[32];
         uint8_t password[64];
     } sta;
+    struct {
+        uint8_t ssid[32];
+        uint8_t password[64];
+        uint8_t ssid_len;
+        uint8_t channel;
+        wifi_auth_mode_t authmode;
+        uint8_t max_connection;
+    } ap;
 } wifi_config_t;
 
 typedef struct {
@@ -105,6 +113,10 @@ extern esp_event_base_t WIFI_EVENT;
 extern esp_event_base_t IP_EVENT;
 #define WIFI_EVENT_SCAN_DONE 1
 #define WIFI_EVENT_STA_DISCONNECTED 2
+#define WIFI_EVENT_AP_START 3
+#define WIFI_EVENT_AP_STOP 4
+#define WIFI_EVENT_AP_STACONNECTED 5
+#define WIFI_EVENT_AP_STADISCONNECTED 6
 #define IP_EVENT_STA_GOT_IP 1
 
 typedef struct {
@@ -158,6 +170,8 @@ esp_err_t esp_wifi_set_max_tx_power(int8_t power);
 esp_err_t esp_wifi_set_channel(uint8_t primary, wifi_second_chan_t second);
 
 esp_netif_t *esp_netif_new(const esp_netif_config_t *esp_netif_config);
+esp_netif_t *esp_netif_create_default_wifi_ap(void);
+esp_err_t esp_netif_get_ip_info(esp_netif_t *esp_netif, esp_netif_ip_info_t *ip_info);
 esp_err_t esp_netif_attach_wifi_station(esp_netif_t *esp_netif);
 esp_err_t esp_wifi_set_default_wifi_sta_handlers(void);
 esp_err_t esp_event_handler_register(esp_event_base_t event_base, int32_t event_id,

@@ -377,9 +377,6 @@ namespace pxsim._wifi {
         return new RefBuffer(new Uint8Array(0))
     }
 
-    export function setExternalAntenna(external: boolean): void {
-    }
-
     declare const enum WifiEvent {
         ScanDone = 1,
         GotIP = 2,

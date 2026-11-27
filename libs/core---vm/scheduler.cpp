@@ -67,8 +67,8 @@ static uint64_t startTime;
 #endif
 
 struct VMCoreState {
-    FiberContext *allFibers;
-    FiberContext *currentFiber;
+    FiberContext *fibers;
+    FiberContext *currFiber;
     TValue *stackBase;
     TValue *stackTop;
     TValue *stackLimit;
@@ -188,11 +188,11 @@ static inline VMCoreState &coreState(int cid = -1) {
 }
 
 FiberContext *getCurrentFiber() {
-    return coreState().currentFiber;
+    return coreState().currFiber;
 }
 
-#define currentFiber (coreState().currentFiber)
-#define allFibers (coreState().allFibers)
+#define currentFiber (coreState().currFiber)
+#define allFibers (coreState().fibers)
 
 static pthread_mutex_t eventMutex;
 static pthread_cond_t newEventBroadcast;
@@ -402,15 +402,15 @@ FiberContext *setupThread(Action a, TValue arg = 0, HandlerBinding *hb = NULL, i
     t->imgbase = (uint16_t *)vmImg->dataStart;
 
     // add at the end
-    if (cs.allFibers)
-        for (auto p = cs.allFibers; p; p = p->next) {
+    if (cs.fibers)
+        for (auto p = cs.fibers; p; p = p->next) {
             if (!p->next) {
                 p->next = t;
                 break;
             }
         }
     else
-        cs.allFibers = t;
+        cs.fibers = t;
 
     return t;
 }
@@ -763,9 +763,9 @@ void gcProcessStacks(int flags) {
     int cnt = 0;
     for (int c = 0; c < PXT_MAX_CORES; ++c) {
         auto &cs = coreState(c);
-        for (auto f = cs.allFibers; f; f = f->next) {
+        for (auto f = cs.fibers; f; f = f->next) {
             TValue *end, *ptr;
-            if (f == cs.currentFiber) {
+            if (f == cs.currFiber) {
                 end = f->stackTop;
                 ptr = f->sp;
             } else {
@@ -819,10 +819,10 @@ void systemReset() {
 
     for (int c = 0; c < PXT_MAX_CORES; ++c) {
         auto &cs = coreState(c);
-        cs.currentFiber = NULL;
-        while (cs.allFibers) {
-            auto t = cs.allFibers;
-            cs.allFibers = t->next;
+        cs.currFiber = NULL;
+        while (cs.fibers) {
+            auto t = cs.fibers;
+            cs.fibers = t->next;
             xfree(t->stackCopy);
             xfree(t);
         }
