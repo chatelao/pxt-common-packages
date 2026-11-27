@@ -18,7 +18,9 @@ int eventID() {
     return WIFI_ID;
 }
 
-static bool scan_done, is_connected,  login_server;
+static bool scan_done, is_connected, login_server, ap_enabled;
+static int ap_station_count;
+static esp_netif_t *ap_netif = NULL;
 static esp_netif_ip_info_t ip_info;
 
 static void raiseWifiEvent(WifiEvent e) {
@@ -44,6 +46,43 @@ static void got_ip_handler(void *arg, esp_event_base_t event_base, int32_t event
     auto ev = (ip_event_got_ip_t *)event_data;
     ip_info = ev->ip_info;
     raiseWifiEvent(WifiEvent::GotIP);
+}
+
+static void ap_start_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
+                             void *event_data) {
+    ap_enabled = true;
+    LOG("ap started");
+    raiseWifiEvent(WifiEvent::APStarted);
+}
+
+static void ap_stop_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
+                            void *event_data) {
+    ap_enabled = false;
+    ap_station_count = 0;
+    LOG("ap stopped");
+    raiseWifiEvent(WifiEvent::APStopped);
+}
+
+static void ap_staconnected_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
+                                    void *event_data) {
+    ap_station_count++;
+    LOG("ap sta connected (%d)", ap_station_count);
+    raiseWifiEvent(WifiEvent::APStationConnected);
+}
+
+static void ap_stadisconnected_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
+                                       void *event_data) {
+    if (ap_station_count > 0)
+        ap_station_count--;
+    LOG("ap sta disconnected (%d)", ap_station_count);
+    raiseWifiEvent(WifiEvent::APStationDisconnected);
+}
+
+static void ensureApNetif() {
+    if (!ap_netif) {
+        ap_netif = esp_netif_create_default_wifi_ap();
+        assert(ap_netif);
+    }
 }
 
 static void init() {
@@ -79,6 +118,14 @@ static void init() {
                                                &disconnect_handler, NULL));
     ESP_ERROR_CHECK(
         esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &got_ip_handler, NULL));
+    ESP_ERROR_CHECK(
+        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_START, &ap_start_handler, NULL));
+    ESP_ERROR_CHECK(
+        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STOP, &ap_stop_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STACONNECTED,
+                                               &ap_staconnected_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_AP_STADISCONNECTED,
+                                               &ap_stadisconnected_handler, NULL));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_start());
@@ -208,6 +255,8 @@ Buffer scanResults() {
 /** Initiate connection. */
 //%
 int connect(String ssid, String pass) {
+    init();
+
     wifi_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
     strlcpy((char *)cfg.sta.ssid, ssid->getUTF8Data(), sizeof(cfg.sta.ssid));
@@ -216,7 +265,7 @@ int connect(String ssid, String pass) {
     if (is_connected)
         return -1;
 
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(ap_enabled ? WIFI_MODE_APSTA : WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &cfg));
     ESP_ERROR_CHECK(esp_wifi_connect());
 
@@ -257,6 +306,92 @@ int rssi() {
     if (esp_wifi_sta_get_ap_info(&info) == 0)
         return info.rssi;
     return -128;
+}
+
+int startAPInternal(const char *ssid, const char *password, int channel, int maxConnections) {
+    if (!ssid)
+        return -1;
+    size_t ssidLen = strlen(ssid);
+    if (ssidLen == 0 || ssidLen > 32)
+        return -1;
+
+    size_t passLen = password ? strlen(password) : 0;
+    if (passLen > 0 && (passLen < 8 || passLen > 63))
+        return -2;
+
+    if (channel < 1 || channel > 13)
+        channel = 1;
+    if (maxConnections < 1)
+        maxConnections = 1;
+    if (maxConnections > 10)
+        maxConnections = 10;
+
+    init();
+    ensureApNetif();
+
+    wifi_config_t ap_cfg;
+    memset(&ap_cfg, 0, sizeof(ap_cfg));
+    memcpy(ap_cfg.ap.ssid, ssid, ssidLen);
+    ap_cfg.ap.ssid_len = (uint8_t)ssidLen;
+    ap_cfg.ap.channel = (uint8_t)channel;
+    ap_cfg.ap.max_connection = (uint8_t)maxConnections;
+    if (passLen == 0) {
+        ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
+    } else {
+        memcpy(ap_cfg.ap.password, password, passLen);
+        ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    }
+
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (err != ESP_OK)
+        return -3;
+    err = esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+    if (err != ESP_OK)
+        return -4;
+
+    ap_enabled = true;
+    LOG("SoftAP started: %s (ch=%d, max=%d)", ssid, channel, maxConnections);
+    return 0;
+}
+
+/** Start a WiFi access point (SoftAP). Password must be empty (open) or 8..63 chars (WPA2). */
+//%
+int startAP(String ssid, String password, int channel, int maxConnections) {
+    const char *ssidStr = ssid ? ssid->getUTF8Data() : "";
+    const char *passStr = password ? password->getUTF8Data() : "";
+    return startAPInternal(ssidStr, passStr, channel, maxConnections);
+}
+
+/** Stop the WiFi access point (SoftAP). */
+//%
+void stopAP() {
+    if (!ap_enabled)
+        return;
+    ap_enabled = false;
+    ap_station_count = 0;
+    esp_wifi_set_mode(WIFI_MODE_STA);
+}
+
+/** Check if the WiFi access point is enabled. */
+//%
+bool isAPEnabled() {
+    return ap_enabled;
+}
+
+/** Return AP ipv4 address, netmask, and gateway. */
+//%
+Buffer apIpInfo() {
+    esp_netif_ip_info_t info;
+    memset(&info, 0, sizeof(info));
+    if (ap_netif)
+        esp_netif_get_ip_info(ap_netif, &info);
+    return mkBuffer(&info, sizeof(info));
+}
+
+/** Return the number of stations currently connected to the access point. */
+//%
+int apStationCount() {
+    return ap_station_count;
 }
 
 /** Select external U.FL antenna (true) or onboard ceramic antenna (false). */

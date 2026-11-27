@@ -5,6 +5,7 @@
         "README.md",
         "controller.ts",
         "controllersocket.ts",
+        "dashboard.ts",
         "net.ts",
         "netutil.ts",
         "requests.ts"

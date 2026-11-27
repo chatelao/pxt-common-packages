@@ -185,4 +185,97 @@ namespace net {
     export function clearAccessPoints() {
         settings.deviceSecrets.setSecret(AP_SECRETS_KEY, undefined);
     }
+
+    export enum AccessPointEvent {
+        //% block="started"
+        Started = ControllerEvent.APStarted,
+        //% block="stopped"
+        Stopped = ControllerEvent.APStopped,
+        //% block="client connected"
+        ClientConnected = ControllerEvent.APStationConnected,
+        //% block="client disconnected"
+        ClientDisconnected = ControllerEvent.APStationDisconnected,
+    }
+
+    /**
+     * Start a WiFi access point (SoftAP).
+     * Leave password empty for an open network, or provide 8..63 characters for WPA2.
+     */
+    //% blockId=net_start_ap block="start access point $ssid||password $password channel $channel max clients $maxConnections"
+    //% group="Access Point"
+    //% ssid.defl="MakeCode-AP"
+    //% password.defl=""
+    //% channel.defl=1 channel.min=1 channel.max=13
+    //% maxConnections.defl=4 maxConnections.min=1 maxConnections.max=10
+    export function startAccessPoint(
+        ssid: string,
+        password: string = "",
+        channel: number = 1,
+        maxConnections: number = 4
+    ): boolean {
+        const inst = net.instance();
+        const c = inst ? inst.controller : undefined;
+        return c ? c.startAP(ssid, password, channel, maxConnections) : false;
+    }
+
+    /**
+     * Stop the WiFi access point.
+     */
+    //% blockId=net_stop_ap block="stop access point"
+    //% group="Access Point"
+    export function stopAccessPoint(): void {
+        const inst = net.instance();
+        const c = inst ? inst.controller : undefined;
+        if (c) c.stopAP();
+    }
+
+    /**
+     * Returns true if the WiFi access point is currently active.
+     */
+    //% blockId=net_is_ap_enabled block="access point enabled"
+    //% group="Access Point"
+    export function isAccessPointEnabled(): boolean {
+        const inst = net.instance();
+        const c = inst ? inst.controller : undefined;
+        return c ? c.isAPEnabled() : false;
+    }
+
+    /**
+     * Returns the IPv4 address of the WiFi access point (typically "192.168.4.1"),
+     * or an empty string if the access point is not enabled.
+     */
+    //% blockId=net_ap_ip block="access point IP"
+    //% group="Access Point"
+    export function accessPointIP(): string {
+        const inst = net.instance();
+        const c = inst ? inst.controller : undefined;
+        if (!c || !c.isAPEnabled())
+            return "";
+        const ip = c.apIPaddress;
+        if (!ip || ip.length < 4)
+            return "";
+        return `${ip[0]}.${ip[1]}.${ip[2]}.${ip[3]}`;
+    }
+
+    /**
+     * Returns the number of clients currently connected to the WiFi access point.
+     */
+    //% blockId=net_ap_clients block="access point clients"
+    //% group="Access Point"
+    export function accessPointClientCount(): number {
+        const inst = net.instance();
+        const c = inst ? inst.controller : undefined;
+        return c ? c.apStationCount : 0;
+    }
+
+    /**
+     * Run code when an access point event occurs.
+     */
+    //% blockId=net_on_ap_event block="on access point $ev"
+    //% group="Access Point"
+    export function onAccessPointEvent(ev: AccessPointEvent, handler: () => void): void {
+        const inst = net.instance();
+        const c = inst ? inst.controller : undefined;
+        if (c) c.onEvent(ev as number as ControllerEvent, handler);
+    }
 }

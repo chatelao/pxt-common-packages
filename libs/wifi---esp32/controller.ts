@@ -18,6 +18,21 @@ namespace net {
             control.internalOnEvent(_wifi.eventID(), WifiEvent.GotIP, () => {
                 this.setConnected(true)
             })
+            control.internalOnEvent(_wifi.eventID(), WifiEvent.APStarted, () => {
+                this.emitEvent(ControllerEvent.APStarted)
+            })
+            control.internalOnEvent(_wifi.eventID(), WifiEvent.APStopped, () => {
+                this.emitEvent(ControllerEvent.APStopped)
+            })
+            control.internalOnEvent(_wifi.eventID(), WifiEvent.APStationConnected, () => {
+                this.emitEvent(ControllerEvent.APStationConnected)
+            })
+            control.internalOnEvent(_wifi.eventID(), WifiEvent.APStationDisconnected, () => {
+                this.emitEvent(ControllerEvent.APStationDisconnected)
+            })
+            control.internalOnEvent(_wifi.eventID(), WifiEvent.DashboardUpdated, () => {
+                this.emitEvent(ControllerEvent.DashboardUpdated)
+            })
         }
 
         private scanDone() {
@@ -68,6 +83,52 @@ namespace net {
 
         public isLoginServerEnabled(): boolean {
             return _wifi.isLoginServerEnabled()
+        }
+
+        public startAP(ssid: string, password: string = "", channel: number = 1, maxConnections: number = 4): boolean {
+            const res = _wifi.startAP(ssid, password, channel, maxConnections)
+            if (res != 0) {
+                control.dmesg(`startAP [${ssid}] failed: ${res}`)
+                return false
+            }
+            control.dmesg(`SoftAP [${ssid}] started`)
+            return true
+        }
+
+        public stopAP(): void {
+            _wifi.stopAP()
+        }
+
+        public isAPEnabled(): boolean {
+            return _wifi.isAPEnabled()
+        }
+
+        get apIPaddress(): Buffer {
+            return _wifi.isAPEnabled() ? _wifi.apIpInfo().slice(0, 4) : undefined
+        }
+
+        get apStationCount(): number {
+            return _wifi.apStationCount()
+        }
+
+        public dashboardStart(title: string, captivePortal: boolean): void {
+            _wifi.dashboardStart(title, captivePortal)
+        }
+
+        public dashboardStop(): void {
+            _wifi.dashboardStop()
+        }
+
+        public dashboardClear(): void {
+            _wifi.dashboardClear()
+        }
+
+        public dashboardUpsertWidget(id: number, kind: number, label: string, minVal: number, maxVal: number, value: number, text: string): void {
+            _wifi.dashboardUpsertWidget(id, kind, label, minVal, maxVal, value, text)
+        }
+
+        public dashboardNextEvent(): Buffer {
+            return _wifi.dashboardNextEvent()
         }
 
         public disconnectAP() {

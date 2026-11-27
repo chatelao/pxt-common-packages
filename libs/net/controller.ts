@@ -7,7 +7,12 @@ namespace net {
         NoKnownNetworks = 5,
         Connecting = 6,
         ConnectionFailed = 7,
-        LoginServerStarted = 8
+        LoginServerStarted = 8,
+        APStarted = 9,
+        APStopped = 10,
+        APStationConnected = 11,
+        APStationDisconnected = 12,
+        DashboardUpdated = 13
     }
     export class Controller {
         eventID: number
@@ -50,6 +55,41 @@ namespace net {
 
         public isLoginServerEnabled(): boolean {
             return false;
+        }
+
+        public startAP(ssid: string, password: string = "", channel: number = 1, maxConnections: number = 4): boolean {
+            return false;
+        }
+
+        public stopAP(): void {
+        }
+
+        public isAPEnabled(): boolean {
+            return false;
+        }
+
+        get apIPaddress(): Buffer {
+            return undefined;
+        }
+
+        get apStationCount(): number {
+            return 0;
+        }
+
+        public dashboardStart(title: string, captivePortal: boolean): void {
+        }
+
+        public dashboardStop(): void {
+        }
+
+        public dashboardClear(): void {
+        }
+
+        public dashboardUpsertWidget(id: number, kind: number, label: string, minVal: number, maxVal: number, value: number, text: string): void {
+        }
+
+        public dashboardNextEvent(): Buffer {
+            return undefined;
         }
 
         public socket(): number {

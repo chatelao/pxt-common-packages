@@ -290,7 +290,17 @@ namespace pxsim._wifi {
         _raiseEvent(WifiEvent.ScanDone)
     }
 
+    let apEnabled = false
+    let apClients = 0
+    let loginServerEnabled = false
+
     export function startLoginServer(): void {
+        loginServerEnabled = true
+        _raiseEvent(WifiEvent.LoginServerStarted)
+    }
+
+    export function isLoginServerEnabled(): boolean {
+        return loginServerEnabled
     }
 
     export function isLoginServerEnabled(): boolean {
@@ -321,10 +331,71 @@ namespace pxsim._wifi {
     export function rssi(): number { return -24 }
     export function setExternalAntenna(external: boolean): void { }
 
+    export function startAP(ssid: string, password: string, channel: int32, maxConnections: int32): int32 {
+        if (!ssid || ssid.length > 32)
+            return -1
+        if (password && password.length > 0 && (password.length < 8 || password.length > 63))
+            return -2
+        apEnabled = true
+        _raiseEvent(WifiEvent.APStarted)
+        return 0
+    }
+
+    export function stopAP(): void {
+        if (!apEnabled)
+            return
+        apEnabled = false
+        apClients = 0
+        _raiseEvent(WifiEvent.APStopped)
+    }
+
+    export function isAPEnabled(): boolean {
+        return apEnabled
+    }
+
+    export function apIpInfo(): RefBuffer {
+        const b = new Uint8Array(4 * 3)
+        if (apEnabled) {
+            // 192.168.4.1 / 255.255.255.0 / 192.168.4.1
+            b.set([192, 168, 4, 1, 255, 255, 255, 0, 192, 168, 4, 1], 0)
+        }
+        return new RefBuffer(b)
+    }
+
+    export function apStationCount(): int32 {
+        return apClients
+    }
+
+    export function dashboardStart(title: string, captivePortal: boolean): void {
+    }
+
+    export function dashboardStop(): void {
+    }
+
+    export function dashboardClear(): void {
+    }
+
+    export function dashboardUpsertWidget(id: int32, kind: int32, label: string, minVal: int32, maxVal: int32, value: int32, text: string): void {
+    }
+
+    export function dashboardNextEvent(): RefBuffer {
+        return new RefBuffer(new Uint8Array(0))
+    }
+
+    export function setExternalAntenna(external: boolean): void {
+    }
+
     declare const enum WifiEvent {
         ScanDone = 1,
         GotIP = 2,
         Disconnected = 3,
+        AccessPointCredentialsAvailable = 4,
+        LoginServerStarted = 5,
+        APStarted = 6,
+        APStopped = 7,
+        APStationConnected = 8,
+        APStationDisconnected = 9,
+        DashboardUpdated = 10,
     }
 
 
