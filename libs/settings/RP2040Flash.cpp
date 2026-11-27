@@ -17,7 +17,11 @@ int ZFlash::pageSize(uintptr_t address) {
 
 int ZFlash::totalSize() {
 #ifndef PICO_FLASH_SIZE_BYTES
+#if defined(PICO_RP2350) && PICO_RP2350
+  return 4*1024*1024;
+#else
   return 2*1024*1024;
+#endif
 #else
   return PICO_FLASH_SIZE_BYTES;
 #endif
