@@ -123,3 +123,11 @@ void (*logJDFrame)(const uint8_t *data);
 void (*sendJDFrame)(const uint8_t *data);
 
 } // namespace pxt
+
+extern "C" int pxt_802154_claim(int mode) {
+    static int claimed = 0; // 0 = unclaimed, 1 = OpenThread, 2 = Zigbee
+    if (claimed == 0)
+        claimed = mode;
+    return claimed == mode ? 0 : -1;
+}
+
