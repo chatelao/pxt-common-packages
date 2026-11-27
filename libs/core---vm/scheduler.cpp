@@ -62,8 +62,138 @@ namespace pxt {
 static uint64_t startTime;
 #endif
 
-FiberContext *allFibers;
-FiberContext *currentFiber;
+#ifndef PXT_MAX_CORES
+#define PXT_MAX_CORES 1
+#endif
+
+struct VMCoreState {
+    FiberContext *allFibers;
+    FiberContext *currentFiber;
+    TValue *stackBase;
+    TValue *stackTop;
+    TValue *stackLimit;
+    Action startActions[16];
+    int numStartActions;
+    Action foreverActions[16];
+    int numForeverActions;
+};
+
+static VMCoreState vmCores[PXT_MAX_CORES];
+static bool secondaryCoresStarted = false;
+
+#ifdef PXT_MULTICORE
+#ifdef PXT_ESP32
+static TaskHandle_t secondaryCoreTask[PXT_MAX_CORES];
+static SemaphoreHandle_t gcMutex;
+static volatile bool gcPauseRequested[PXT_MAX_CORES];
+static volatile bool gcCoreParked[PXT_MAX_CORES];
+static volatile bool coreInYield[PXT_MAX_CORES];
+
+int coreId() {
+    int cid = xPortGetCoreID();
+    return (cid >= 0 && cid < PXT_MAX_CORES) ? cid : 0;
+}
+
+int coreCount() {
+    return PXT_MAX_CORES;
+}
+
+bool isUserCodeTask() {
+    if (xPortInIsrContext())
+        return false;
+    TaskHandle_t cur = xTaskGetCurrentTaskHandle();
+    if (cur == userCodeTask)
+        return true;
+    for (int i = 1; i < PXT_MAX_CORES; ++i) {
+        if (secondaryCoreTask[i] && cur == secondaryCoreTask[i])
+            return true;
+    }
+    return false;
+}
+
+void vmSafepoint() {
+    int cid = coreId();
+    if (gcPauseRequested[cid]) {
+        gcCoreParked[cid] = true;
+        while (gcPauseRequested[cid]) {
+            vTaskDelay(1);
+        }
+        gcCoreParked[cid] = false;
+    }
+}
+
+void gcLock() {
+    if (!gcMutex) {
+        gcMutex = xSemaphoreCreateRecursiveMutex();
+    }
+    int cid = coreId();
+    while (xSemaphoreTakeRecursive(gcMutex, 1) != pdTRUE) {
+        if (gcPauseRequested[cid]) {
+            vmSafepoint();
+        }
+    }
+}
+
+void gcUnlock() {
+    if (gcMutex) {
+        xSemaphoreGiveRecursive(gcMutex);
+    }
+}
+
+void gcSuspendOtherCores() {
+    int cid = coreId();
+    for (int i = 0; i < PXT_MAX_CORES; ++i) {
+        if (i == cid)
+            continue;
+        if (i > 0 && !secondaryCoreTask[i])
+            continue;
+        gcCoreParked[i] = false;
+        gcPauseRequested[i] = true;
+        while (!gcCoreParked[i] && !coreInYield[i]) {
+            vTaskDelay(1);
+        }
+    }
+}
+
+void gcResumeOtherCores() {
+    int cid = coreId();
+    for (int i = 0; i < PXT_MAX_CORES; ++i) {
+        if (i == cid)
+            continue;
+        gcPauseRequested[i] = false;
+        while (gcCoreParked[i]) {
+            vTaskDelay(1);
+        }
+    }
+}
+#endif
+#else
+int coreId() {
+    return 0;
+}
+
+int coreCount() {
+    return 1;
+}
+
+void vmSafepoint() {}
+#endif
+
+static inline VMCoreState &coreState(int cid = -1) {
+    if (cid < 0)
+        cid = coreId();
+    if (cid < 0 || cid >= PXT_MAX_CORES)
+        cid = 0;
+    return vmCores[cid];
+}
+
+FiberContext *getCurrentFiber() {
+    return coreState().currentFiber;
+}
+
+#define currentFiber (coreState().currentFiber)
+#define allFibers (coreState().allFibers)
+
 static pthread_mutex_t eventMutex;
 static pthread_cond_t newEventBroadcast;
 
@@ -162,7 +292,15 @@ void sleep_core_us(uint64_t us) {
 
 void target_yield() {
 #ifdef PXT_ESP32
+#ifdef PXT_MULTICORE
+    int cid = coreId();
+    coreInYield[cid] = true;
     vTaskDelay(1);
+    coreInYield[cid] = false;
+    vmSafepoint();
+#else
+    vTaskDelay(1);
+#endif
 #else
     sleep_core_us(1000);
 #endif
@@ -222,25 +360,23 @@ void disposeFiber(FiberContext *t) {
 
 #define INITIAL_STACK_COPY_SIZE 16
 
-FiberContext *setupThread(Action a, TValue arg = 0, HandlerBinding *hb = NULL) {
-#if 0
-    int numThreads = 0;
-    for (auto p = allFibers; p; p = p->next)
-        numThreads++;
-    DMESG("setup thread: %p #%d", a, numThreads);
-    //if (numThreads > 10)
-    //    abort();
-#endif
+FiberContext *setupThread(Action a, TValue arg = 0, HandlerBinding *hb = NULL, int targetCore = -1) {
+    auto &cs = coreState(targetCore);
+    int cid = (targetCore >= 0 && targetCore < PXT_MAX_CORES) ? targetCore : coreId();
     auto t = (FiberContext *)xmalloc(sizeof(FiberContext));
     memset(t, 0, sizeof(*t));
-    if (!vmImg->stackBase) {
-        vmImg->stackBase = (TValue *)xmalloc(VM_STACK_SIZE * sizeof(TValue));
-        vmImg->stackTop = vmImg->stackBase + VM_STACK_SIZE;
-        vmImg->stackLimit = vmImg->stackBase + VM_MAX_FUNCTION_STACK + 5;
+    if (!cs.stackBase) {
+        cs.stackBase = (TValue *)xmalloc(VM_STACK_SIZE * sizeof(TValue));
+        cs.stackTop = cs.stackBase + VM_STACK_SIZE;
+        cs.stackLimit = cs.stackBase + VM_MAX_FUNCTION_STACK + 5;
     }
+    t->stackBase = cs.stackBase;
+    t->stackTop = cs.stackTop;
+    t->stackLimit = cs.stackLimit;
+    t->coreId = cid;
     t->stackCopy = (TValue *)xmalloc(sizeof(TValue) * INITIAL_STACK_COPY_SIZE);
     t->stackCopySize = INITIAL_STACK_COPY_SIZE;
-    t->sp = vmImg->stackTop - 8;
+    t->sp = cs.stackTop - 8;
 
     // DMESG("thr: %p %p", t, t->stackCopy);
 
@@ -266,15 +402,15 @@ FiberContext *setupThread(Action a, TValue arg = 0, HandlerBinding *hb = NULL) {
     t->imgbase = (uint16_t *)vmImg->dataStart;
 
     // add at the end
-    if (allFibers)
-        for (auto p = allFibers; p; p = p->next) {
+    if (cs.allFibers)
+        for (auto p = cs.allFibers; p; p = p->next) {
             if (!p->next) {
                 p->next = t;
                 break;
             }
         }
     else
-        allFibers = t;
+        cs.allFibers = t;
 
     return t;
 }
@@ -286,6 +422,38 @@ void runInParallel(Action a) {
 void runForever(Action a) {
     auto f = setupThread(a);
     f->foreverPC = f->resumePC;
+}
+
+void runOnStartOnCore(int core, Action a) {
+    if (a == 0)
+        return;
+#ifdef PXT_MULTICORE
+    if (core > 0 && core < PXT_MAX_CORES) {
+        auto &cs = coreState(core);
+        registerGCPtr(a);
+        if (cs.numStartActions < 16)
+            cs.startActions[cs.numStartActions++] = a;
+        return;
+    }
+#endif
+    (void)core;
+    runInParallel(a);
+}
+
+void runForeverOnCore(int core, Action a) {
+    if (a == 0)
+        return;
+#ifdef PXT_MULTICORE
+    if (core > 0 && core < PXT_MAX_CORES) {
+        auto &cs = coreState(core);
+        registerGCPtr(a);
+        if (cs.numForeverActions < 16)
+            cs.foreverActions[cs.numForeverActions++] = a;
+        return;
+    }
+#endif
+    (void)core;
+    runForever(a);
 }
 
 void waitForEvent(int source, int value) {
@@ -380,7 +548,7 @@ static void saveStack() {
     auto f = currentFiber;
     if (!f)
         return;
-    int sizeNeeded = vmImg->stackTop - f->sp;
+    int sizeNeeded = f->stackTop - f->sp;
     // DMESG("save %d %p", sizeNeeded, f);
     if (!f->stackCopy || sizeNeeded > f->stackCopySize) {
         xfree(f->stackCopy);
@@ -393,7 +561,7 @@ static void saveStack() {
 
 static void restoreStack() {
     auto f = currentFiber;
-    memcpy(f->sp, f->stackCopy, (uint8_t *)vmImg->stackTop - (uint8_t *)f->sp);
+    memcpy(f->sp, f->stackCopy, (uint8_t *)f->stackTop - (uint8_t *)f->sp);
 }
 
 static void mainRunLoop() {
@@ -458,6 +626,10 @@ static void mainRunLoop() {
                         }
                     }
                     disposeFiber(f);
+                    if (!secondaryCoresStarted) {
+                        secondaryCoresStarted = true;
+                        startSecondaryCores();
+                    }
                 }
             }
             f = n;
@@ -553,24 +725,61 @@ void *gcAllocBlock(size_t sz) {
     return r;
 }
 
+#ifdef PXT_MULTICORE
+#ifdef PXT_ESP32
+static void secondaryCoreTaskEntry(void *arg) {
+    int cid = (int)(uintptr_t)arg;
+    auto &cs = coreState(cid);
+    for (int i = 0; i < cs.numStartActions; ++i) {
+        setupThread(cs.startActions[i], 0, NULL, cid);
+    }
+    for (int i = 0; i < cs.numForeverActions; ++i) {
+        auto f = setupThread(cs.foreverActions[i], 0, NULL, cid);
+        f->foreverPC = f->resumePC;
+    }
+    mainRunLoop();
+    vTaskDelete(NULL);
+}
+#endif
+#endif
+
+void startSecondaryCores() {
+#ifdef PXT_MULTICORE
+#ifdef PXT_ESP32
+    for (int cid = 1; cid < PXT_MAX_CORES; ++cid) {
+        auto &cs = coreState(cid);
+        if (cs.numStartActions == 0 && cs.numForeverActions == 0)
+            continue;
+        if (!secondaryCoreTask[cid]) {
+            xTaskCreatePinnedToCore(secondaryCoreTaskEntry, "pxt_core", 8192, (void *)(uintptr_t)cid,
+                                    1, &secondaryCoreTask[cid], cid);
+        }
+    }
+#endif
+#endif
+}
+
 void gcProcessStacks(int flags) {
     int cnt = 0;
-    for (auto f = allFibers; f; f = f->next) {
-        TValue *end, *ptr;
-        if (f == currentFiber) {
-            end = vmImg->stackTop;
-            ptr = f->sp;
-        } else {
-            end = f->stackCopy + (vmImg->stackTop - f->sp);
-            ptr = f->stackCopy;
-        }
-        gcProcess((TValue)f->currAction);
-        gcProcess((TValue)f->r0);
-        if (flags & 2)
-            DMESG("RS%d:%p/%d", cnt++, ptr, end - ptr);
-        // VLOG("mark: %p - %p", ptr, end);
-        while (ptr < end) {
-            gcProcess(*ptr++);
+    for (int c = 0; c < PXT_MAX_CORES; ++c) {
+        auto &cs = coreState(c);
+        for (auto f = cs.allFibers; f; f = f->next) {
+            TValue *end, *ptr;
+            if (f == cs.currentFiber) {
+                end = f->stackTop;
+                ptr = f->sp;
+            } else {
+                end = f->stackCopy + (f->stackTop - f->sp);
+                ptr = f->stackCopy;
+            }
+            gcProcess((TValue)f->currAction);
+            gcProcess((TValue)f->r0);
+            if (flags & 2)
+                DMESG("RS%d(c%d):%p/%d", cnt++, c, ptr, end - ptr);
+            // VLOG("mark: %p - %p", ptr, end);
+            while (ptr < end) {
+                gcProcess(*ptr++);
+            }
         }
     }
 }
@@ -608,9 +817,15 @@ void systemReset() {
 
     coreReset(); // clears handler bindings
 
-    currentFiber = NULL;
-    while (allFibers) {
-        disposeFiber(allFibers);
+    for (int c = 0; c < PXT_MAX_CORES; ++c) {
+        auto &cs = coreState(c);
+        cs.currentFiber = NULL;
+        while (cs.allFibers) {
+            auto t = cs.allFibers;
+            cs.allFibers = t->next;
+            xfree(t->stackCopy);
+            xfree(t);
+        }
     }
 
     // this will consume all events, but won't dispatch anything, since all listener maps are empty

@@ -35,6 +35,24 @@ typedef uint8_t PinName;
 // XIP range in 0x1000_0000 ~ 0x1100_0000
 #define PXT_IS_READONLY(v) (isTagged(v) || ((uintptr_t)v & 0x10000000))
 
+#define PXT_MULTICORE 1
+#define PXT_MAX_CORES 2
+
+namespace pxt {
+void gcLock();
+void gcUnlock();
+void gcSuspendOtherCores();
+void gcResumeOtherCores();
+void coreSleepMs(unsigned ms);
+void marshalSendSerial(const char *data, int len);
+void marshalRaiseEvent(int src, int val);
+} // namespace pxt
+
+#define PXT_GC_LOCK() pxt::gcLock()
+#define PXT_GC_UNLOCK() pxt::gcUnlock()
+#define PXT_GC_SUSPEND_OTHER_CORES() pxt::gcSuspendOtherCores()
+#define PXT_GC_RESUME_OTHER_CORES() pxt::gcResumeOtherCores()
+
 #define P0 0
 #define P1 1
 #define P2 2

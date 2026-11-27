@@ -32,6 +32,7 @@
         "eventcontext.ts",
         "pause.ts",
         "forever.ts",
+        "multicore.ts",
         "utfdecoder.ts",
         "scheduling.ts",
         "controlmessage.ts",

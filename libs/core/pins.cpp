@@ -15,6 +15,7 @@ DevicePin *getPin(int id) {
 
     // we could use lookupComponent() here - it would be slightly slower
 
+    PXT_GC_LOCK();
     int ptr = pinPos[id];
     if (ptr == 0) {
         pinPtrs = (DevicePin **)realloc(pinPtrs, (numPinPtrs + 1) * sizeof(void *));
@@ -26,7 +27,9 @@ DevicePin *getPin(int id) {
         ptr = numPinPtrs;
         pinPos[id] = ptr;
     }
-    return pinPtrs[ptr - 1];
+    DevicePin *res = pinPtrs[ptr - 1];
+    PXT_GC_UNLOCK();
+    return res;
 }
 
 //%

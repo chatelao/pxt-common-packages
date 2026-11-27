@@ -46,7 +46,10 @@ void LogQueue::writeCore(const char *buf, int len) {
     ptr += len;
 }
 
+static portMUX_TYPE logQueueMux = portMUX_INITIALIZER_UNLOCKED;
+
 int LogQueue::read(char *buf, int len) {
+    portENTER_CRITICAL(&logQueueMux);
     if (rdPtr < 0) {
         if (numWrap == 0) {
             rdPtr = 0;
@@ -82,6 +85,7 @@ int LogQueue::read(char *buf, int len) {
     if (rdPtr >= (int)sizeof(buffer))
         rdPtr = 0;
 
+    portEXIT_CRITICAL(&logQueueMux);
     return len;
 }
 
@@ -89,6 +93,7 @@ int LogQueue::write(const char *buf, int len) {
     if (len > (int)sizeof(buffer) / 2)
         return -1;
 
+    portENTER_CRITICAL(&logQueueMux);
     int left = sizeof(buffer) - ptr;
 
     if (left < len + 1) {
@@ -103,6 +108,7 @@ int LogQueue::write(const char *buf, int len) {
 
     writeCore(buf, len);
     buffer[ptr] = 0;
+    portEXIT_CRITICAL(&logQueueMux);
 
     return 0;
 }

@@ -177,6 +177,12 @@ struct FiberContext {
     TValue *stackCopy;
     int stackCopySize;
 
+    // per-core stack bounds for this fiber
+    TValue *stackBase;
+    TValue *stackTop;
+    TValue *stackLimit;
+    int coreId;
+
     // wait_for_event
     int waitSource;
     int waitValue;
@@ -189,7 +195,9 @@ struct FiberContext {
     HandlerBinding *handlerBinding;
 };
 
-#define PXT_EXN_CTX() currentFiber
+FiberContext *getCurrentFiber();
+void vmSafepoint();
+#define PXT_EXN_CTX() pxt::getCurrentFiber()
 
 void restoreVMExceptionState(TryFrame *tf, FiberContext *ctx);
 #define pxt_restore_exception_state restoreVMExceptionState
@@ -202,7 +210,6 @@ void resumeFiberWithFn(FiberContext *ctx, fiber_resume_t fn, void *arg);
 void resumeFiber(FiberContext *ctx, TValue v);
 
 extern VMImage *vmImg;
-extern FiberContext *currentFiber;
 extern volatile int panicCode;
 
 static inline uint16_t *actionPC(RefAction *ra) {

@@ -67,19 +67,27 @@ void op_ldnumber(FiberContext *ctx, unsigned arg) {
 
 //%
 void op_jmp(FiberContext *ctx, unsigned arg) {
+    if ((int)arg < 0)
+        vmSafepoint();
     ctx->pc += (int)arg;
 }
 
 //%
 void op_jmpz(FiberContext *ctx, unsigned arg) {
-    if (!toBoolQuick(ctx->r0))
+    if (!toBoolQuick(ctx->r0)) {
+        if ((int)arg < 0)
+            vmSafepoint();
         ctx->pc += (int)arg;
+    }
 }
 
 //%
 void op_jmpnz(FiberContext *ctx, unsigned arg) {
-    if (toBoolQuick(ctx->r0))
+    if (toBoolQuick(ctx->r0)) {
+        if ((int)arg < 0)
+            vmSafepoint();
         ctx->pc += (int)arg;
+    }
 }
 
 static inline VTable *getStaticVTable(VMImage *img, unsigned classId) {
@@ -138,7 +146,7 @@ static RefAction *bindAction(FiberContext *ctx, RefAction *ra, TValue obj) {
 }
 
 static inline void runAction(FiberContext *ctx, RefAction *ra) {
-    if (ctx->sp < ctx->img->stackLimit)
+    if (ctx->sp < ctx->stackLimit)
         soft_panic(PANIC_STACK_OVERFLOW);
 
     PUSH((TValue)ctx->currAction);
@@ -220,11 +228,11 @@ static void dump_pc(int addr, const uint8_t *srcmap) {
 }
 
 void vm_stack_trace() {
-    auto ctx = currentFiber;
+    auto ctx = getCurrentFiber();
     if (!ctx)
         return;
     DMESG("stack trace (programHash:%d):", programHash());
-    auto end = vmImg->stackTop;
+    auto end = ctx->stackTop;
     auto ptr = ctx->sp;
     auto srcmap = find_src_map();
     dump_pc((ctx->pc - ctx->imgbase) << 1, srcmap);
@@ -299,9 +307,9 @@ void op_ret(FiberContext *ctx, unsigned arg) {
     // check if we're leaving a function that still has open try blocks
     // (this results from invalid code generation)
     if (ctx->tryFrame &&
-        ctx->tryFrame->registers[2] < (uint8_t *)ctx->sp - (uint8_t *)vmImg->stackBase) {
+        ctx->tryFrame->registers[2] < (uint8_t *)ctx->sp - (uint8_t *)ctx->stackBase) {
         DMESG("try frame %p left on return %d/%d", ctx->tryFrame, ctx->tryFrame->registers[2],
-              (uint8_t *)ctx->sp - (uint8_t *)vmImg->stackBase);
+              (uint8_t *)ctx->sp - (uint8_t *)ctx->stackBase);
         vm_stack_trace();
         target_panic(PANIC_VM_ERROR);
     }
@@ -357,14 +365,14 @@ void op_try(FiberContext *ctx, unsigned arg) {
     auto f = pxt::beginTry();
     f->registers[0] = (uintptr_t)ctx->currAction;
     f->registers[1] = (uintptr_t)(ctx->pc + (int)arg);
-    f->registers[2] = (uint8_t *)ctx->sp - (uint8_t *)vmImg->stackBase;
+    f->registers[2] = (uint8_t *)ctx->sp - (uint8_t *)ctx->stackBase;
 }
 
 void restoreVMExceptionState(TryFrame *tf, FiberContext *ctx) {
     // TODO verification
     ctx->currAction = (RefAction *)tf->registers[0];
     ctx->pc = (uint16_t *)tf->registers[1];
-    ctx->sp = (TValue *)((uint8_t *)vmImg->stackBase + tf->registers[2]);
+    ctx->sp = (TValue *)((uint8_t *)ctx->stackBase + tf->registers[2]);
     longjmp(ctx->loopjmp, 1);
 }
 
@@ -597,11 +605,6 @@ String convertToString(FiberContext *ctx, TValue v) {
 }
 
 void exec_loop(FiberContext *ctx) {
-    if (ctx->img->execLock) {
-        DMESG("image locked!");
-        target_panic(PANIC_VM_ERROR);
-    }
-    ctx->img->execLock = 1;
     auto opcodes = ctx->img->opcodes;
     setjmp(ctx->loopjmp);
     while (ctx->pc) {
@@ -609,7 +612,7 @@ void exec_loop(FiberContext *ctx) {
             break;
         uint16_t opcode = *ctx->pc++;
         TRACE("0x%x: %04x %d", (uint8_t *)ctx->pc - 2 - (uint8_t *)ctx->img->dataStart, opcode,
-              (int)(vmImg->stackTop - ctx->sp));
+              (int)(ctx->stackTop - ctx->sp));
         if (opcode >> 15 == 0) {
             opcodes[opcode & VM_OPCODE_BASE_MASK](ctx, opcode >> VM_OPCODE_ARG_POS);
             if (opcode & VM_OPCODE_PUSH_MASK)
@@ -626,7 +629,6 @@ void exec_loop(FiberContext *ctx) {
                 PUSH(ctx->r0);
         }
     }
-    ctx->img->execLock = 0;
 }
 
 } // namespace pxt

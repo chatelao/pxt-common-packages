@@ -42,6 +42,17 @@ void registerResetFunction(reset_fn_t fn);
 void soft_panic(int errorCode);
 
 extern TaskHandle_t userCodeTask;
+#if !CONFIG_FREERTOS_UNICORE && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(CONFIG_IDF_TARGET_ESP32C6) && !defined(CONFIG_IDF_TARGET_ESP32C3)
+#define PXT_MULTICORE 1
+#define PXT_MAX_CORES 2
+bool isUserCodeTask();
+void gcLock();
+void gcUnlock();
+void gcSuspendOtherCores();
+void gcResumeOtherCores();
+#else
+#define PXT_MAX_CORES 1
+#endif
 
 void install_gpio0_handler();
 
@@ -49,7 +60,15 @@ void install_gpio0_handler();
 
 #define IMAGE_BITS 4
 
+#ifdef PXT_MULTICORE
+#define PXT_IN_ISR() (!pxt::isUserCodeTask())
+#define PXT_GC_LOCK() pxt::gcLock()
+#define PXT_GC_UNLOCK() pxt::gcUnlock()
+#define PXT_GC_SUSPEND_OTHER_CORES() pxt::gcSuspendOtherCores()
+#define PXT_GC_RESUME_OTHER_CORES() pxt::gcResumeOtherCores()
+#else
 #define PXT_IN_ISR() (xTaskGetCurrentTaskHandle() != userCodeTask)
+#endif
 
 #define GC_BLOCK_SIZE (1024 * 16)
 

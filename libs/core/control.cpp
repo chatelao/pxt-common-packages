@@ -16,6 +16,12 @@ namespace control {
 //% help=control/raise-event
 //% block="raise event|from %src|with value %value" blockExternalInputs=1
 void raiseEvent(int src, int value) {
+#ifdef PXT_MULTICORE
+    if (pxt::coreId() != 0) {
+        pxt::marshalRaiseEvent(src, value);
+        return;
+    }
+#endif
     Event evt(src, value);
 }
 

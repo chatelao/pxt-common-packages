@@ -137,6 +137,12 @@ void releaseFiber() {
 }
 
 void sleep_ms(unsigned ms) {
+#ifdef PXT_MULTICORE
+    if (coreId() != 0) {
+        coreSleepMs(ms);
+        return;
+    }
+#endif
     fiber_sleep(ms);
 }
 
@@ -195,13 +201,29 @@ uint64_t current_time_us() {
     return system_timer_current_time_us();
 }
 
+#ifdef PXT_MULTICORE
+ThreadContext *secondaryThreadCtx[PXT_MAX_CORES];
+#endif
+
 ThreadContext *getThreadContext() {
+#ifdef PXT_MULTICORE
+    int cid = coreId();
+    if (cid != 0)
+        return secondaryThreadCtx[cid];
+#endif
     if (!currentFiber)
         return NULL;
     return (ThreadContext *)currentFiber->user_data;
 }
 
 void setThreadContext(ThreadContext *ctx) {
+#ifdef PXT_MULTICORE
+    int cid = coreId();
+    if (cid != 0) {
+        secondaryThreadCtx[cid] = ctx;
+        return;
+    }
+#endif
     currentFiber->user_data = ctx;
 }
 
@@ -245,6 +267,26 @@ void gcProcessStacks(int flags) {
         }
     }
     xfree(fibers);
+
+#ifdef PXT_MULTICORE
+    for (int c = 1; c < PXT_MAX_CORES; ++c) {
+        auto ctx = secondaryThreadCtx[c];
+        if (!ctx)
+            continue;
+        gcProcess(ctx->thrownValue);
+        for (auto seg = &ctx->stack; seg; seg = seg->next) {
+            auto ptr = (TValue *)seg->top;
+            auto end = (TValue *)seg->bottom;
+            if (!ptr || ptr >= end)
+                continue;
+            if (flags & 2)
+                DMESG("RS_C%d:%p/%d", c, ptr, end - ptr);
+            while (ptr < end) {
+                gcProcess(*ptr++);
+            }
+        }
+    }
+#endif
 }
 
 LowLevelTimer *getJACDACTimer() {

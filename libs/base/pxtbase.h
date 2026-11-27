@@ -141,6 +141,11 @@ uint64_t getLongSerialNumber();
 void registerWithDal(int id, int event, Action a, int flags = 16); // EVENT_LISTENER_DEFAULT_FLAGS
 void runInParallel(Action a);
 void runForever(Action a);
+void runOnStartOnCore(int core, Action a);
+void runForeverOnCore(int core, Action a);
+void startSecondaryCores();
+int coreId();
+int coreCount();
 void waitForEvent(int id, int event);
 //%
 unsigned afterProgramPage();
@@ -998,6 +1003,16 @@ void gcFreeze();
 #ifdef PXT_VM
 void gcStartup();
 void gcPreStartup();
+#endif
+
+#ifndef PXT_GC_LOCK
+#define PXT_GC_LOCK() ((void)0)
+#define PXT_GC_UNLOCK() ((void)0)
+#endif
+
+#ifndef PXT_GC_SUSPEND_OTHER_CORES
+#define PXT_GC_SUSPEND_OTHER_CORES() ((void)0)
+#define PXT_GC_RESUME_OTHER_CORES() ((void)0)
 #endif
 
 void coreReset();

@@ -139,6 +139,7 @@ void popThreadContext(ThreadContext *ctx) {
     if (!ctx)
         return;
 
+    PXT_GC_LOCK();
     auto n = ctx->stack.next;
     if (n) {
         VLOG("seg %p", n);
@@ -163,6 +164,7 @@ void popThreadContext(ThreadContext *ctx) {
         app_free(ctx);
         setThreadContext(NULL);
     }
+    PXT_GC_UNLOCK();
 #endif
 }
 
@@ -175,6 +177,7 @@ ThreadContext *pushThreadContext(void *sp, void *endSP) {
     if (PXT_IN_ISR())
         target_panic(PANIC_CALLED_FROM_ISR);
 
+    PXT_GC_LOCK();
     auto curr = getThreadContext();
     tempRoot = (TValue *)endSP;
     tempRootLen = (uintptr_t *)sp - (uintptr_t *)endSP;
@@ -217,6 +220,7 @@ ThreadContext *pushThreadContext(void *sp, void *endSP) {
     tempRootLen = 0;
     curr->stack.bottom = sp;
     curr->stack.top = NULL;
+    PXT_GC_UNLOCK();
     return curr;
 #endif
 }
@@ -599,16 +603,20 @@ static void sweep(int flags) {
 }
 
 void gc(int flags) {
+    PXT_GC_LOCK();
     startPerfCounter(PerfCounters::GC);
     GC_CHECK(!(inGC & IN_GC_COLLECT), 40);
     inGC |= IN_GC_COLLECT;
+    PXT_GC_SUSPEND_OTHER_CORES();
     VLOG("GC mark");
     mark(flags);
     VLOG("GC sweep");
     sweep(flags);
+    PXT_GC_RESUME_OTHER_CORES();
     VLOG("GC done");
     stopPerfCounter(PerfCounters::GC);
     inGC &= ~IN_GC_COLLECT;
+    PXT_GC_UNLOCK();
 }
 
 #ifdef GC_GET_HEAP_SIZE
@@ -687,12 +695,16 @@ void *app_alloc_at(void *at, int numbytes) {
     if (!at)
         return NULL;
 
+    PXT_GC_LOCK();
     numbytes = ALIGN_TO_WORD(numbytes) + sizeof(void *);
     auto r = (uintptr_t *)gcAllocAt((uintptr_t *)at - 1, numbytes);
-    if (!r)
+    if (!r) {
+        PXT_GC_UNLOCK();
         return NULL;
+    }
     *r = ARRAY_MASK | PERMA_MASK | (TOWORDS(numbytes) << 2);
     gc(0);
+    PXT_GC_UNLOCK();
     return r + 1;
 }
 
@@ -700,16 +712,20 @@ void *app_alloc(int numbytes) {
     if (!numbytes)
         return NULL;
 
+    PXT_GC_LOCK();
     // gc(0);
     auto r = (uintptr_t *)gcAllocateArray(numbytes);
     r[-1] |= PERMA_MASK;
+    PXT_GC_UNLOCK();
     return r;
 }
 
 void *app_free(void *ptr) {
+    PXT_GC_LOCK();
     auto r = (uintptr_t *)ptr;
     GC_CHECK((r[-1] & (ARRAY_MASK | PERMA_MASK)) == (ARRAY_MASK | PERMA_MASK), 41);
     r[-1] |= FREE_MASK;
+    PXT_GC_UNLOCK();
     return r;
 }
 
@@ -752,6 +768,7 @@ void *gcAllocate(int numbytes) {
     if (numbytes > GC_MAX_ALLOC_SIZE)
         soft_panic(PANIC_GC_TOO_BIG_ALLOCATION);
 
+    PXT_GC_LOCK();
     if (PXT_IN_ISR() || (inGC & (IN_GC_PREALLOC | IN_GC_ALLOC | IN_GC_COLLECT | IN_GC_FREEZE)))
         target_panic(PANIC_CALLED_FROM_ISR);
 
@@ -803,6 +820,7 @@ void *gcAllocate(int numbytes) {
                       nf ? (void *)nf->vtable : 0);
                 GC_CHECK(!nf || !nf->nextFree || !isReadOnly((TValue)nf->nextFree), 48);
                 inGC &= ~IN_GC_ALLOC;
+                PXT_GC_UNLOCK();
                 return p;
             }
             prev = p;
@@ -816,9 +834,11 @@ void *gcAllocate(int numbytes) {
             DMESG("gcAlloc(%d) (%d/%d free; %d max block) -> new block", numbytes,
                   gcStats.lastFreeBytes, gcStats.totalBytes, gcStats.lastMaxBlockBytes);
             allocateBlock();
-        } else
+        } else {
             // the block allocated was apparently too small
+            PXT_GC_UNLOCK();
             soft_panic(PANIC_GC_OOM);
+        }
     }
 }
 
@@ -843,39 +863,38 @@ void registerGC(TValue *root, int numwords) {
     if (!numwords)
         return;
 
-    if (numwords > 1) {
-        while (numwords-- > 0) {
-            registerGC(root++, 1);
-        }
-        return;
+    PXT_GC_LOCK();
+    while (numwords-- > 0) {
+        gcRoots.push((TValue)((uintptr_t)(root++) | 1));
     }
-
-    gcRoots.push((TValue)((uintptr_t)root | 1));
+    PXT_GC_UNLOCK();
 }
 
 void unregisterGC(TValue *root, int numwords) {
     if (!numwords)
         return;
-    if (numwords > 1) {
-        while (numwords-- > 0) {
-            unregisterGC(root++, 1);
-        }
-        return;
-    }
 
-    removePtr((TValue)((uintptr_t)root | 1));
+    PXT_GC_LOCK();
+    while (numwords-- > 0) {
+        removePtr((TValue)((uintptr_t)(root++) | 1));
+    }
+    PXT_GC_UNLOCK();
 }
 
 void registerGCPtr(TValue ptr) {
     if (isReadOnly(ptr))
         return;
+    PXT_GC_LOCK();
     gcRoots.push(ptr);
+    PXT_GC_UNLOCK();
 }
 
 void unregisterGCPtr(TValue ptr) {
     if (isReadOnly(ptr))
         return;
+    PXT_GC_LOCK();
     removePtr(ptr);
+    PXT_GC_UNLOCK();
 }
 
 void RefImage::scan(RefImage *t) {

@@ -467,8 +467,30 @@ void exec_binary(unsigned *pc) {
 
     runAction0((Action)startptr);
 
+    startSecondaryCores();
+
     pxt::releaseFiber();
 }
+
+__attribute__((weak)) int coreId() {
+    return 0;
+}
+
+__attribute__((weak)) int coreCount() {
+    return 1;
+}
+
+__attribute__((weak)) void runOnStartOnCore(int core, Action a) {
+    (void)core;
+    runInParallel(a);
+}
+
+__attribute__((weak)) void runForeverOnCore(int core, Action a) {
+    (void)core;
+    runForever(a);
+}
+
+__attribute__((weak)) void startSecondaryCores() {}
 
 void start() {
     exec_binary((unsigned *)functionsAndBytecode);

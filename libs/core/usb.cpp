@@ -144,6 +144,12 @@ void setSendToUART(void (*f)(const char *, int)) {
 }
 
 void sendSerial(const char *data, int len) {
+#ifdef PXT_MULTICORE
+    if (coreId() != 0) {
+        marshalSendSerial(data, len);
+        return;
+    }
+#endif
 #if CONFIG_ENABLED(DEVICE_USB)
     hf2.sendSerial(data, len);
 #if HF2_HID
